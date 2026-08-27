@@ -335,7 +335,7 @@ update_script_only() {
 
 # exit and remove tmpdir
 exit_and_del_tmpdir() {
-    rm -rf $tmpdir
+    rm -rf "$tmpdir"
     [[ ! $1 ]] && {
         msg err "哦豁.."
         msg err "安装过程出现错误..."
@@ -343,7 +343,7 @@ exit_and_del_tmpdir() {
         echo
         exit 1
     }
-    exit
+    exit 0
 }
 
 # main
