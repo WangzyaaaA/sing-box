@@ -86,10 +86,18 @@ python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'
 
 ### 3.1 全新安装
 
-在 Linux 服务器获取完整仓库后，以 root 身份运行本地安装：
+在受支持的 Linux 服务器上以 root 身份执行一键安装：
 
 ```bash
-git clone https://github.com/233boy/sing-box.git
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh)
+```
+
+无需下载整个仓库。`install.sh` 会从本仓库的 GitHub Release 下载发布包。
+
+如需审查源码或进行本地修改，也可以获取完整仓库后安装：
+
+```bash
+git clone https://github.com/WangzyaaaA/sing-box.git
 cd sing-box
 bash install.sh --local-install
 ```
@@ -103,17 +111,20 @@ bash install.sh --local-install
 sing-box audit enable
 ```
 
-### 3.2 已安装服务器：使用正式发布版本
+### 3.2 已安装服务器：迁移到本仓库
 
-当包含审计功能的脚本版本已发布后，在服务器执行：
+如果服务器原来安装的是 `233boy/sing-box`，它的 `sing-box update.sh` 仍指向原作者仓库。
+执行下面的一次性迁移，把管理脚本更新源切换到本仓库：
 
 ```bash
-sing-box update.sh
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --script-update
 sing-box audit enable
 ```
 
-`update.sh` 只更新 `/etc/sing-box/sh` 下的脚本文件，不会删除
-`/etc/sing-box/audit` 或 `/var/lib/sing-box-audit` 中的配置和数据库。
+`--script-update` 只覆盖 `/etc/sing-box/sh` 下的管理脚本，不重装 sing-box，不修改
+`/etc/sing-box/conf` 中的代理配置，也不会删除 `/etc/sing-box/audit` 或
+`/var/lib/sing-box-audit` 中的配置和数据库。迁移后再执行 `sing-box update.sh` 时，
+脚本会从本仓库获取更新。
 
 ### 3.3 已安装服务器：部署当前本地源码
 

@@ -43,9 +43,35 @@
 
 脚本的参数非常高效率并且超级易用，请掌握参数的使用
 
+# 一键安装
+
+在受支持的 Linux 服务器上以 `root` 身份执行：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh)
+```
+
+无需克隆整个仓库。安装器会从本仓库的 GitHub Release 下载所需脚本，并继续使用原来的
+`/usr/local/bin/sing-box` 和 `/usr/local/bin/sb` 命令入口。流量审计为可选功能，安装完成后执行：
+
+```bash
+sing-box audit enable
+```
+
+如果服务器原来安装的是 `233boy/sing-box`，先执行一次脚本源迁移：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --script-update
+sing-box audit enable
+```
+
+这个操作只覆盖 `/etc/sing-box/sh` 中的管理脚本，不重装 sing-box，不修改现有代理配置，
+也不会删除审计数据库。迁移后可继续使用 `sing-box update.sh` 获取本仓库的新版本。
+
 # 文档
 
-安装及使用：https://233boy.com/sing-box/sing-box-script/
+- 流量审计：[部署与使用文档](docs/traffic-audit.md)
+- 原脚本安装及使用：https://233boy.com/sing-box/sing-box-script/
 
 # 帮助
 
@@ -113,7 +139,7 @@ Usage: sing-box [options]... [args]...
    h, help                                         显示此帮助界面
 
 谨慎使用 del, ddel, 此选项会直接删除配置; 无需确认
-反馈问题) https://github.com/233boy/sing-box/issues
+反馈问题) https://github.com/WangzyaaaA/sing-box/issues
 文档(doc) https://233boy.com/sing-box/sing-box-script/
 ```
 

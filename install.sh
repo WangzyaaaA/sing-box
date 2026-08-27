@@ -70,7 +70,7 @@ is_conf_dir=$is_core_dir/conf
 is_log_dir=/var/log/$is_core
 is_sh_bin=/usr/local/bin/$is_core
 is_sh_dir=$is_core_dir/sh
-is_sh_repo=$author/$is_core
+is_sh_repo=WangzyaaaA/$is_core
 is_audit_name=${is_core}-audit
 is_audit_dir=$is_core_dir/audit
 is_audit_config=$is_audit_dir/config.json
@@ -132,9 +132,10 @@ msg() {
 
 # show help msg
 show_help() {
-    echo -e "Usage: $0 [-f xxx | -l | -p xxx | -v xxx | -h]"
+    echo -e "Usage: $0 [-f xxx | -l | --script-update | -p xxx | -v xxx | -h]"
     echo -e "  -f, --core-file <path>          自定义 $is_core_name 文件路径, e.g., -f /root/$is_core-linux-amd64.tar.gz"
     echo -e "  -l, --local-install             本地获取安装脚本, 使用当前目录"
+    echo -e "      --script-update             仅更新已安装的管理脚本, 保留配置和审计数据"
     echo -e "  -p, --proxy <addr>              使用代理下载, e.g., -p http://127.0.0.1:2333"
     echo -e "  -v, --core-version <ver>        自定义 $is_core_name 版本, e.g., -v v1.8.13"
     echo -e "  -h, --help                      显示此帮助界面\n"
@@ -275,6 +276,10 @@ pass_args() {
             local_install=1
             shift 1
             ;;
+        --script-update)
+            script_update=1
+            shift 1
+            ;;
         -p | --proxy)
             [[ -z $2 ]] && {
                 err "($1) 缺少必需参数, 正确使用示例: [$1 http://127.0.0.1:2333 or -p socks5://127.0.0.1:2333]"
@@ -303,6 +308,31 @@ pass_args() {
     }
 }
 
+# update installed management scripts without reinstalling sing-box
+update_script_only() {
+    [[ ! -f $is_sh_bin || ! -d $is_sh_dir ]] && {
+        err "未检测到已安装的 $is_core_name 管理脚本."
+    }
+
+    mkdir -p "$tmpdir"
+    install_pkg "wget tar bash"
+    [[ ! -f $is_pkg_ok ]] && {
+        err "安装更新依赖失败."
+    }
+
+    is_wget=$(type -P wget)
+    download sh
+    [[ ! -f $is_sh_ok ]] && {
+        err "下载 ${is_core_name} 脚本失败."
+    }
+    tar tzf "$is_sh_ok" &>/dev/null || err "下载的脚本包无法通过校验."
+    tar zxf "$is_sh_ok" -C "$is_sh_dir" || err "更新 ${is_core_name} 脚本失败."
+    chmod +x "$is_sh_dir/$is_core.sh" "$is_sh_bin" "${is_sh_bin/$is_core/sb}"
+    rm -rf "$tmpdir"
+    msg ok "管理脚本更新完成; 配置和审计数据均已保留."
+    exit 0
+}
+
 # exit and remove tmpdir
 exit_and_del_tmpdir() {
     rm -rf $tmpdir
@@ -319,13 +349,15 @@ exit_and_del_tmpdir() {
 # main
 main() {
 
+    # check parameters before detecting an existing installation so that
+    # --script-update can migrate installations from the upstream script.
+    [[ $# -gt 0 ]] && pass_args $@
+    [[ $script_update ]] && update_script_only
+
     # check old version
     [[ -f $is_sh_bin && -d $is_core_dir/bin && -d $is_sh_dir && -d $is_conf_dir ]] && {
         err "检测到脚本已安装, 如需重装请使用${green} ${is_core} reinstall ${none}命令."
     }
-
-    # check parameters
-    [[ $# -gt 0 ]] && pass_args $@
 
     # show welcome msg
     clear
