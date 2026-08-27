@@ -62,6 +62,33 @@ ProtectSystem=full
 [Install]
 WantedBy=multi-user.target"
         ;;
+    $is_audit_name)
+        local python_bin
+        python_bin=$(type -P python3)
+        cat >/lib/systemd/system/$is_audit_name.service <<EOF
+[Unit]
+Description=$is_core_name Traffic Audit Service
+After=network-online.target $is_core.service
+Wants=network-online.target $is_core.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$is_audit_data_dir
+ExecStart=$python_bin $is_audit_server --config $is_audit_config
+Restart=on-failure
+RestartSec=3s
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadOnlyPaths=$is_core_dir
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        ;;
     esac
 
     # enable, reload
@@ -114,6 +141,32 @@ depend() {
 }
 EOF
         chmod +x /etc/init.d/caddy
+        ;;
+    $is_audit_name)
+        local python_bin
+        python_bin=$(type -P python3)
+        cat >/etc/init.d/$is_audit_name <<EOF
+#!/sbin/openrc-run
+
+name="$is_core_name Traffic Audit"
+description="$is_core_name Traffic Audit Service"
+
+command="$python_bin"
+command_args="$is_audit_server --config $is_audit_config"
+command_background=true
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/$is_core/audit.log"
+error_log="/var/log/$is_core/audit-error.log"
+
+supervisor=supervise-daemon
+umask 0027
+
+depend() {
+    need net
+    after $is_core
+}
+EOF
+        chmod +x /etc/init.d/$is_audit_name
         ;;
     esac
 

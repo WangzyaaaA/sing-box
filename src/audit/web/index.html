@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="sing-box 流量审计仪表盘">
+  <title>流量审计 · sing-box</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <div><strong>sing-box</strong><span>流量审计</span></div>
+      </div>
+      <div class="top-actions">
+        <span class="health" id="health"><i></i><span>正在连接</span></span>
+        <label class="range-label" for="range">时间范围</label>
+        <select id="range" aria-label="时间范围">
+          <option value="1h">最近 1 小时</option>
+          <option value="6h">最近 6 小时</option>
+          <option value="24h" selected>最近 24 小时</option>
+          <option value="7d">最近 7 天</option>
+          <option value="30d">最近 30 天</option>
+          <option value="all">全部</option>
+        </select>
+        <button class="button secondary" id="refresh" type="button">刷新</button>
+        <button class="button primary" id="exportCsv" type="button">导出 CSV</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">TRAFFIC OBSERVATORY</p>
+          <h1>连接看得见，流量有据可查。</h1>
+          <p>从本机 sing-box 管理接口采集数据，记录连接去向、用户、协议与上下行用量。</p>
+        </div>
+        <div class="live-rate" aria-label="当前速率">
+          <span>当前速率</span>
+          <strong id="liveRate">0 B/s</strong>
+          <small><b class="down">↓</b> <span id="downRate">0 B/s</span> <b class="up">↑</b> <span id="upRate">0 B/s</span></small>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="流量摘要">
+        <article class="metric"><span>总流量</span><strong id="totalTraffic">—</strong><small id="rangeCopy">最近 24 小时</small></article>
+        <article class="metric"><span>下载</span><strong id="downloadTraffic">—</strong><small class="down">DOWNLOAD</small></article>
+        <article class="metric"><span>上传</span><strong id="uploadTraffic">—</strong><small class="up">UPLOAD</small></article>
+        <article class="metric"><span>活动连接</span><strong id="activeConnections">—</strong><small><span id="allConnections">0</span> 条审计记录</small></article>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel chart-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">TRANSFER</p><h2>流量趋势</h2></div>
+            <div class="legend"><span><i class="dot down-bg"></i>下载</span><span><i class="dot up-bg"></i>上传</span></div>
+          </div>
+          <div class="chart-wrap"><canvas id="trafficChart" role="img" aria-label="上传和下载流量趋势图"></canvas><div class="empty-chart" id="emptyChart">等待采集流量数据</div></div>
+        </article>
+
+        <article class="panel destinations-panel">
+          <div class="panel-heading"><div><p class="eyebrow">DESTINATIONS</p><h2>热门目标</h2></div></div>
+          <ol class="destination-list" id="destinations"><li class="placeholder">暂无目标记录</li></ol>
+        </article>
+      </section>
+
+      <section class="panel records-panel">
+        <div class="panel-heading records-heading">
+          <div><p class="eyebrow">CONNECTION LOG</p><h2>连接审计记录</h2></div>
+          <div class="filters">
+            <label><span class="sr-only">搜索</span><input id="search" type="search" placeholder="搜索 IP、域名、用户…" autocomplete="off"></label>
+            <label><span class="sr-only">协议</span><select id="protocol"><option value="">全部协议</option></select></label>
+            <label><span class="sr-only">状态</span><select id="status"><option value="">全部状态</option><option value="active">活动</option><option value="closed">已结束</option></select></label>
+            <button class="button secondary" id="exportJson" type="button">JSON</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>开始时间</th><th>来源</th><th>目标</th><th>用户 / 入站</th><th>协议</th><th>路由</th><th class="number">上传</th><th class="number">下载</th><th>状态</th></tr></thead>
+            <tbody id="connectionRows"><tr><td colspan="9" class="empty-row">正在读取审计数据…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pagination"><span id="pageInfo">第 1 页</span><div><button class="button secondary" id="prevPage" type="button">上一页</button><button class="button secondary" id="nextPage" type="button">下一页</button></div></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="tokenDialog">
+    <form id="tokenForm" method="dialog">
+      <span class="brand-mark">S</span>
+      <p class="eyebrow">SECURE ACCESS</p>
+      <h2>输入审计访问令牌</h2>
+      <p>在服务器运行 <code>sing-box audit token</code> 可查看令牌。</p>
+      <label><span>访问令牌</span><input id="tokenInput" type="password" required autocomplete="current-password" autofocus></label>
+      <p class="form-error" id="tokenError" role="alert"></p>
+      <button class="button primary" type="submit">进入仪表盘</button>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -86,6 +86,12 @@ is_sh_dir=$is_core_dir/sh
 is_sh_repo=$author/$is_core
 is_pkg="wget unzip tar qrencode bash"
 is_config_json=$is_core_dir/config.json
+is_audit_name=${is_core}-audit
+is_audit_dir=$is_core_dir/audit
+is_audit_config=$is_audit_dir/config.json
+is_audit_data_dir=/var/lib/$is_audit_name
+is_audit_database=$is_audit_data_dir/audit.db
+is_audit_server=$is_sh_dir/src/audit/server.py
 is_caddy_bin=/usr/local/bin/caddy
 is_caddy_dir=/etc/caddy
 is_caddy_repo=caddyserver/caddy
@@ -120,6 +126,14 @@ if [[ $(pgrep -f $is_core_bin) ]]; then
 else
     is_core_status=$(_red_bg stopped)
     is_core_stop=1
+fi
+if [[ -f $is_audit_config ]]; then
+    if [[ $(pgrep -f "$is_audit_server --config $is_audit_config") ]]; then
+        is_audit_status=$(_green running)
+    else
+        is_audit_status=$(_red_bg stopped)
+        is_audit_stop=1
+    fi
 fi
 if [[ -f $is_caddy_bin && -d $is_caddy_dir && $is_caddy_service ]]; then
     is_caddy=1

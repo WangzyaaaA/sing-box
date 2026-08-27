@@ -23,6 +23,8 @@
 - 一键添加 VLESS-(WS/H2/HTTPUpgrade)-TLS
 - 一键添加 Trojan-(WS/H2/HTTPUpgrade)-TLS
 - 一键启用 BBR
+- 可选流量审计服务与 Web 仪表盘
+- 审计数据筛选、CSV/JSON 导出与自动保留
 - 一键更改伪装网站
 - 一键更改 (端口/UUID/密码/域名/路径/加密方式/SNI/等...)
 - 还有更多...
@@ -68,6 +70,7 @@ Usage: sing-box [options]... [args]...
    qr [name]                                       二维码信息
    url [name]                                      URL 信息
    log                                             查看日志
+   audit [...]                                     流量审计、Web 展示与数据导出
 更改:
    full [name] [...]                               更改多个参数
    id [name] [uuid | auto]                         更改 UUID
@@ -95,7 +98,7 @@ Usage: sing-box [options]... [args]...
    u, update [core | sh | caddy] [ver]             更新
    U, update.sh                                    更新脚本
    s, status                                       运行状态
-   start, stop, restart [caddy]                    启动, 停止, 重启
+   start, stop, restart [caddy | audit]            启动, 停止, 重启
    t, test                                         测试运行
    reinstall                                       重装脚本
 
@@ -113,3 +116,45 @@ Usage: sing-box [options]... [args]...
 反馈问题) https://github.com/233boy/sing-box/issues
 文档(doc) https://233boy.com/sing-box/sing-box-script/
 ```
+
+# 流量审计
+
+完整说明请参阅：[流量审计部署与使用](docs/traffic-audit.md)。
+
+流量审计是可选的独立服务，默认只监听 `127.0.0.1:9091`。它通过 sing-box 的本机
+Clash API 采集连接与上下行字节，使用 SQLite 持久化，并提供响应式 Web 页面、筛选、
+分页以及 CSV/JSON 导出。默认保留 90 天数据；首次启用时才会安装 Python 3，不影响
+未使用该功能的安装。
+
+```bash
+# 启用并显示页面地址、访问令牌
+sing-box audit enable
+
+# 查看状态、页面地址和令牌
+sing-box audit status
+sing-box audit url
+sing-box audit token
+
+# 导出最近 7 天的数据
+sing-box audit export csv 7d
+sing-box audit export json 7d /root/audit.json
+
+# 调整保留天数或采集间隔
+sing-box audit set retention 30
+sing-box audit set interval 5
+
+# 停止但保留数据；或彻底卸载并删除数据
+sing-box audit disable
+sing-box audit uninstall
+```
+
+从远程电脑访问默认监听地址时，建议使用 SSH 端口转发：
+
+```bash
+ssh -L 9091:127.0.0.1:9091 root@服务器IP
+```
+
+然后打开 `http://127.0.0.1:9091/` 并输入 `sing-box audit token` 显示的令牌。
+如确需监听所有网卡，可使用 `sing-box audit enable 0.0.0.0 9091`，但应在防火墙或
+反向代理处限制来源并配置 TLS。审计记录包含来源 IP、目标地址和用户标识，请依据当地
+法规设置保留期限并控制访问权限。

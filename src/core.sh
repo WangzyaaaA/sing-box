@@ -381,13 +381,16 @@ create() {
         is_log='log:{output:"/var/log/'$is_core'/access.log",level:"info","timestamp":true}'
         is_dns='dns:{}'
         is_ntp='ntp:{"enabled":true,"server":"time.apple.com"},'
+        is_experimental=
         if [[ -f $is_config_json ]]; then
+            is_experimental=$(jq -c '.experimental // empty' "$is_config_json")
             [[ $(jq .ntp.enabled $is_config_json) != "true" ]] && is_ntp=
         else
             [[ ! $is_ntp_on ]] && is_ntp=
         fi
         is_outbounds='outbounds:[{tag:"direct",type:"direct"}]'
         is_server_config_json=$(jq "{$is_log,$is_dns,$is_ntp$is_outbounds}" <<<{})
+        [[ $is_experimental ]] && is_server_config_json=$(jq --argjson experimental "$is_experimental" '.experimental = $experimental' <<<$is_server_config_json)
         cat <<<$is_server_config_json >$is_config_json
         manage restart &
         ;;
@@ -696,6 +699,10 @@ uninstall() {
     fi
     manage stop &>/dev/null
     manage disable &>/dev/null
+    [[ -f $is_audit_config ]] && {
+        load audit.sh
+        audit_uninstall -y parent
+    }
     rm -rf $is_core_dir $is_log_dir $is_sh_bin ${is_sh_bin/$is_core/sb}
     if [[ $is_systemd ]]; then
         rm -f /lib/systemd/system/$is_core.service
@@ -747,6 +754,12 @@ manage() {
         is_do_name=$2
         is_run_bin=$is_caddy_bin
         is_do_name_msg=Caddy
+        ;;
+    audit | $is_audit_name)
+        [[ -f $is_audit_config ]] || err "流量审计尚未启用, 请先运行: $is_core audit enable"
+        is_do_name=$is_audit_name
+        is_run_bin=$is_audit_server
+        is_do_name_msg=流量审计
         ;;
     *)
         is_do_name=$is_core
@@ -1634,7 +1647,7 @@ is_main_menu() {
         show_help
         ;;
     9)
-        ask list is_do_other "启用BBR 查看日志 测试运行 重装脚本 设置DNS"
+        ask list is_do_other "启用BBR 查看日志 测试运行 重装脚本 设置DNS 流量审计"
         case $REPLY in
         1)
             load bbr.sh
@@ -1653,6 +1666,10 @@ is_main_menu() {
         5)
             load dns.sh
             dns_set
+            ;;
+        6)
+            load audit.sh
+            audit_main
             ;;
         esac
         ;;
@@ -1763,6 +1780,10 @@ main() {
         load log.sh
         log_set $2
         ;;
+    audit)
+        load audit.sh
+        audit_main ${@:2}
+        ;;
     url | qr)
         url_qr $@
         ;;
@@ -1785,9 +1806,10 @@ main() {
     s | status)
         msg "\n$is_core_name $is_core_ver: $is_core_status\n"
         [[ $is_caddy ]] && msg "Caddy $is_caddy_ver: $is_caddy_status\n"
+        [[ -f $is_audit_config ]] && msg "流量审计: $is_audit_status\n"
         ;;
     start | stop | r | restart)
-        [[ $2 && $2 != 'caddy' ]] && err "无法识别 ($2), 请使用: $is_core $1 [caddy]"
+        [[ $2 && $2 != 'caddy' && $2 != 'audit' && $2 != "$is_audit_name" ]] && err "无法识别 ($2), 请使用: $is_core $1 [caddy | audit]"
         manage $1 $2 &
         ;;
     t | test)
