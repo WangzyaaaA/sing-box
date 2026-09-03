@@ -2,7 +2,7 @@
 
 const state = {
   token: sessionStorage.getItem("auditToken") || "", range: "24h", customStart: "", customEnd: "",
-  page: 1, pages: 1, usagePage: 1, usagePages: 1, timer: null,
+  page: 1, pages: 1, usagePage: 1, usagePages: 1, configUsagePage: 1, configUsagePages: 1, timer: null,
 };
 const $ = (id) => document.getElementById(id);
 const rangeLabels = { "1h": "最近 1 小时", "6h": "最近 6 小时", "24h": "最近 24 小时", "7d": "最近 7 天", "30d": "最近 30 天", all: "全部时间" };
@@ -176,6 +176,17 @@ function renderUsage(data) {
   body.innerHTML = data.items.map((item) => `<tr><td>${escapeHtml(item.source_ip || "未知")}</td><td title="${escapeHtml(item.config_name)}">${escapeHtml(item.config_name || "未识别")}</td><td title="${escapeHtml(item.user)}">${escapeHtml(item.user || "—")}</td><td>${formatTime(item.first_seen_at)}</td><td>${formatTime(item.last_seen_at)}</td><td class="number">${new Intl.NumberFormat("zh-CN").format(item.connections)}</td><td class="number up">${formatBytes(item.upload)}</td><td class="number down">${formatBytes(item.download)}</td><td class="number total-value">${formatBytes(item.total)}</td></tr>`).join("");
 }
 
+function renderConfigUsage(data) {
+  state.configUsagePages = data.pages;
+  state.configUsagePage = data.page;
+  $("configUsagePageInfo").textContent = `第 ${data.page} / ${data.pages} 页 · ${data.total} 个配置`;
+  $("configUsagePrevPage").disabled = data.page <= 1;
+  $("configUsageNextPage").disabled = data.page >= data.pages;
+  const body = $("configUsageRows");
+  if (!data.items.length) { body.innerHTML = '<tr><td colspan="9" class="empty-row">当前时间段没有可归属的配置流量</td></tr>'; return; }
+  body.innerHTML = data.items.map((item) => `<tr><td title="${escapeHtml(item.config_name)}">${escapeHtml(item.config_name || "未识别")}</td><td>${formatTime(item.first_seen_at)}</td><td>${formatTime(item.last_seen_at)}</td><td class="number">${new Intl.NumberFormat("zh-CN").format(item.clients)}</td><td class="number">${new Intl.NumberFormat("zh-CN").format(item.users)}</td><td class="number">${new Intl.NumberFormat("zh-CN").format(item.connections)}</td><td class="number up">${formatBytes(item.upload)}</td><td class="number down">${formatBytes(item.download)}</td><td class="number total-value">${formatBytes(item.total)}</td></tr>`).join("");
+}
+
 async function loadOptions() {
   const data = await api(`/api/options?${timeParams()}`);
   const select = $("protocol"), selected = select.value;
@@ -199,12 +210,23 @@ function usageQuery() {
   return params;
 }
 
+function configUsageQuery() {
+  const params = timeParams();
+  params.set("page", String(state.configUsagePage)); params.set("limit", "50");
+  if ($("configUsageSearch").value.trim()) params.set("config_search", $("configUsageSearch").value.trim());
+  return params;
+}
+
 async function loadConnections() {
   renderConnections(await api(`/api/connections?${connectionQuery()}`));
 }
 
 async function loadUsage() {
   renderUsage(await api(`/api/client-usage?${usageQuery()}`));
+}
+
+async function loadConfigUsage() {
+  renderConfigUsage(await api(`/api/config-usage?${configUsageQuery()}`));
 }
 
 async function loadDashboard(showNotice = false) {
@@ -214,7 +236,7 @@ async function loadDashboard(showNotice = false) {
       api(`/api/summary?${query}`), api(`/api/timeseries?${query}`), api(`/api/top-destinations?${query}`),
     ]);
     renderSummary(summary); drawChart(series.points); renderDestinations(destinations.items);
-    await Promise.all([loadUsage(), loadConnections(), loadOptions()]);
+    await Promise.all([loadConfigUsage(), loadUsage(), loadConnections(), loadOptions()]);
     if (showNotice) toast("数据已刷新");
   } catch (error) {
     if (error.message !== "访问令牌无效") { $("health").className = "health error"; $("health").querySelector("span").textContent = "服务异常"; toast(error.message); }
@@ -237,30 +259,44 @@ function downloadUsage(format) {
     .catch((error) => toast(error.message));
 }
 
+function downloadConfigUsage(format) {
+  const params = configUsageQuery(); params.delete("page"); params.delete("limit"); params.set("format", format);
+  fetch(`/api/config-usage-export?${params}`, { headers: { Authorization: `Bearer ${state.token}` } })
+    .then((response) => { if (!response.ok) throw new Error("导出失败"); const disposition = response.headers.get("Content-Disposition") || ""; const name = disposition.match(/filename="([^"]+)"/)?.[1] || `sing-box-audit-config-usage.${format}`; return Promise.all([response.blob(), name]); })
+    .then(([blob, name]) => { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url); toast(`已导出配置文件用量 ${format.toUpperCase()}`); })
+    .catch((error) => toast(error.message));
+}
+
 let searchTimer;
 let usageSearchTimer;
+let configUsageSearchTimer;
 $("range").addEventListener("change", () => {
-  state.range = $("range").value; state.page = 1; state.usagePage = 1;
+  state.range = $("range").value; state.page = 1; state.usagePage = 1; state.configUsagePage = 1;
   $("customRange").hidden = state.range !== "custom";
   if (state.range !== "custom") loadDashboard();
 });
 $("applyRange").addEventListener("click", () => {
   const start = $("rangeStart").value, end = $("rangeEnd").value;
   if (!start || !end || new Date(start) > new Date(end)) { toast("请选择有效的开始和结束时间"); return; }
-  state.customStart = start; state.customEnd = end; state.page = 1; state.usagePage = 1; loadDashboard(true);
+  state.customStart = start; state.customEnd = end; state.page = 1; state.usagePage = 1; state.configUsagePage = 1; loadDashboard(true);
 });
 $("refresh").addEventListener("click", () => loadDashboard(true));
 $("protocol").addEventListener("change", () => { state.page = 1; loadConnections(); });
 $("status").addEventListener("change", () => { state.page = 1; loadConnections(); });
 $("search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.page = 1; loadConnections(); }, 280); });
 $("usageSearch").addEventListener("input", () => { clearTimeout(usageSearchTimer); usageSearchTimer = setTimeout(() => { state.usagePage = 1; loadUsage(); }, 280); });
+$("configUsageSearch").addEventListener("input", () => { clearTimeout(configUsageSearchTimer); configUsageSearchTimer = setTimeout(() => { state.configUsagePage = 1; loadConfigUsage(); }, 280); });
 $("prevPage").addEventListener("click", () => { if (state.page > 1) { state.page -= 1; loadConnections(); } });
 $("nextPage").addEventListener("click", () => { if (state.page < state.pages) { state.page += 1; loadConnections(); } });
 $("usagePrevPage").addEventListener("click", () => { if (state.usagePage > 1) { state.usagePage -= 1; loadUsage(); } });
 $("usageNextPage").addEventListener("click", () => { if (state.usagePage < state.usagePages) { state.usagePage += 1; loadUsage(); } });
+$("configUsagePrevPage").addEventListener("click", () => { if (state.configUsagePage > 1) { state.configUsagePage -= 1; loadConfigUsage(); } });
+$("configUsageNextPage").addEventListener("click", () => { if (state.configUsagePage < state.configUsagePages) { state.configUsagePage += 1; loadConfigUsage(); } });
 $("exportCsv").addEventListener("click", () => downloadConnections("csv"));
 $("usageExportCsv").addEventListener("click", () => downloadUsage("csv"));
 $("usageExportJson").addEventListener("click", () => downloadUsage("json"));
+$("configUsageExportCsv").addEventListener("click", () => downloadConfigUsage("csv"));
+$("configUsageExportJson").addEventListener("click", () => downloadConfigUsage("json"));
 $("exportJson").addEventListener("click", () => downloadConnections("json"));
 $("tokenForm").addEventListener("submit", async (event) => {
   event.preventDefault();

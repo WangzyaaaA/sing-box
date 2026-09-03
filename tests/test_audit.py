@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import sqlite3
@@ -114,6 +115,41 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(full_window["items"][0]["download"], 66)
         self.assertEqual(full_window["items"][0]["connections"], 2)
         self.assertEqual(full_window["items"][0]["source_ip"], "198.51.100.10")
+
+    def test_config_usage_combines_clients_and_users_by_config_file(self):
+        first = connection("conn-a", upload=0, download=0, source_ip="198.51.100.10")
+        first["metadata"]["inbound"] = "config-a.json"
+        first["metadata"]["user"] = "user-a"
+        second = connection("conn-b", upload=0, download=0, source_ip="198.51.100.11")
+        second["metadata"]["inbound"] = "config-a.json"
+        second["metadata"]["user"] = "user-b"
+        third = connection("conn-c", upload=0, download=0, source_ip="198.51.100.10")
+        third["metadata"]["inbound"] = "config-b.json"
+        third["metadata"]["user"] = "user-a"
+
+        with mock.patch.object(audit.time, "time", return_value=7000):
+            self.store.capture({"uploadTotal": 0, "downloadTotal": 0, "connections": [first, second, third]})
+        first.update(upload=10, download=20)
+        second.update(upload=30, download=40)
+        third.update(upload=5, download=6)
+        with mock.patch.object(audit.time, "time", return_value=7062):
+            self.store.capture({"uploadTotal": 45, "downloadTotal": 66, "connections": [first, second, third]})
+            result = self.store.config_usage({"range": ["24h"]})
+            filtered = self.store.config_usage({"range": ["24h"], "config_search": ["config-b"]})
+            exported = io.BytesIO()
+            self.store.write_config_usage_export({"range": ["24h"]}, "csv", exported)
+            json_exported = io.BytesIO()
+            self.store.write_config_usage_export({"range": ["24h"]}, "json", json_exported)
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["items"][0]["config_name"], "config-a.json")
+        self.assertEqual(result["items"][0]["clients"], 2)
+        self.assertEqual(result["items"][0]["users"], 2)
+        self.assertEqual(result["items"][0]["connections"], 2)
+        self.assertEqual(result["items"][0]["total"], 100)
+        self.assertEqual(filtered["items"][0]["config_name"], "config-b.json")
+        self.assertIn("config_name,first_seen,last_seen,clients,users", exported.getvalue().decode("utf-8-sig"))
+        self.assertEqual(json.loads(json_exported.getvalue())[0]["config_name"], "config-a.json")
 
     def test_config_resolver_maps_inbound_to_file_and_uuid(self):
         config_dir = Path(self.temp.name) / "conf"
@@ -255,6 +291,7 @@ class HttpIntegrationTests(unittest.TestCase):
             page = response.read().decode("utf-8")
             self.assertIn("连接审计记录", page)
             self.assertIn("IP / 配置流量", page)
+            self.assertIn("配置文件流量", page)
 
     def test_usage_api_custom_range_and_export(self):
         self.server.collector.stop()
@@ -275,6 +312,14 @@ class HttpIntegrationTests(unittest.TestCase):
             body = response.read().decode("utf-8-sig")
             self.assertIn("source_ip,config_name,user", body)
             self.assertIn("198.51.100.10", body)
+        with self.request("/api/config-usage" + query, "test-web-token-123456") as response:
+            payload = json.load(response)
+            self.assertEqual(payload["items"][0]["config_name"], "vless-in")
+            self.assertEqual(payload["items"][0]["total"], 90)
+        with self.request("/api/config-usage-export" + query + "&format=csv", "test-web-token-123456") as response:
+            body = response.read().decode("utf-8-sig")
+            self.assertIn("config_name,first_seen,last_seen,clients,users", body)
+            self.assertIn("vless-in", body)
         with self.assertRaises(HTTPError) as invalid:
             self.request("/api/client-usage?start=invalid&end=10", "test-web-token-123456")
         self.assertEqual(invalid.exception.code, 400)

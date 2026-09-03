@@ -83,6 +83,7 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.025em; }
 .destination-list .placeholder { display: flex; color: var(--muted); justify-content: center; }
 .records-heading { align-items: flex-end; }
 .usage-panel { margin-bottom: 18px; }
+.config-usage-table { min-width: 1080px; }
 .usage-table { min-width: 1180px; }
 .total-value { color: var(--text) !important; font-weight: 800; }
 .table-wrap { width: 100%; overflow-x: auto; }

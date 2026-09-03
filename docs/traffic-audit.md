@@ -42,8 +42,9 @@ sing-box ── 本机 Clash API ──► sing-box-audit
 审计服务通过 sing-box Clash API 的 `/connections` 接口读取总流量和活动连接。
 总流量按核心累计计数增量持久化；每条活动连接也按采集周期计算上传、下载增量，再按
 来源 IP、配置身份和分钟聚合到独立的用量采样表。分钟聚合可避免长期运行时按连接、按秒
-产生过量数据库记录。因此，跨越时间范围的长连接只会把所选分钟内观察到的增量计入
-IP / 配置汇总；自定义起止时间在 IP / 配置用量中按覆盖到的整分钟统计。
+产生过量数据库记录。页面既可按配置文件汇总来源 IP、用户、连接数和流量，也可继续查看
+IP / 配置 / 用户明细。因此，跨越时间范围的长连接只会把所选分钟内观察到的增量计入
+配置汇总和 IP / 配置汇总；自定义起止时间按覆盖到的整分钟统计。
 
 本项目生成的每个代理配置文件对应一个带同名 tag 的入站。审计服务会优先使用 Clash API
 返回的用户字段；核心未返回用户时，则通过入站 tag 只读匹配 `/etc/sing-box/conf/*.json`。
@@ -232,7 +233,7 @@ curl http://127.0.0.1:9091/api/health
 预期返回类似：
 
 ```json
-{"ok":true,"service":"sing-box-audit","version":"1.1.0","auth_required":true}
+{"ok":true,"service":"sing-box-audit","version":"1.2.0","auth_required":true}
 ```
 
 ## 5. 访问 Web 仪表盘
@@ -298,11 +299,12 @@ server {
 - 当前上传、下载和总速率。
 - 1 小时、6 小时、24 小时、7 天、30 天、全部历史或自定义起止时间的流量趋势。
 - 热门目标地址。
+- 按配置文件汇总所选时间段的来源 IP 数、可识别用户数、连接数、上传、下载和合计流量。
 - 按来源 IP、配置文件和 UUID/用户汇总所选时间段的上传、下载、合计、连接数及首次/最后流量时间。
 - 连接开始时间、来源、目标、用户/入站、协议、路由、上传、下载和状态。
 - 按 IP、配置文件、UUID/用户、关键词、协议和连接状态筛选。
 - 分页浏览。
-- 按当前时间范围和筛选条件导出 IP / 配置汇总或连接明细 CSV/JSON。
+- 按当前时间范围和筛选条件导出配置汇总、IP / 配置汇总或连接明细 CSV/JSON。
 
 页面每 5 秒刷新一次；采集服务默认每 1 秒读取一次 sing-box 状态。页面关闭不会停止采集，
 只要 `sing-box-audit` 服务运行，数据就会继续写入 SQLite。
@@ -415,6 +417,23 @@ sing-box audit report json all /root/sing-box-audit-usage.json
 总字节数。Web 页面 IP / 配置面板中的 CSV/JSON 按钮导出相同数据，并支持自定义起止时间；
 页面顶部的“导出连接 CSV”继续导出原有连接明细。
 
+如需仅按配置文件聚合区间用量，使用 `config-report`：
+
+```text
+sing-box audit config-report [csv|json] [1h|6h|24h|7d|30d|all] [输出文件]
+```
+
+```bash
+# 导出最近 7 天每个配置文件的汇总用量
+sing-box audit config-report csv 7d
+
+# 导出全部保留用量为 JSON
+sing-box audit config-report json all /root/sing-box-audit-config-usage.json
+```
+
+配置汇总包含配置文件、首次和最后流量时间、独立来源 IP 数、可识别用户数、连接数以及
+上传、下载和总字节数。Web 页面“配置文件流量”面板中的 CSV/JSON 按钮导出相同数据。
+
 导出采用临时文件流式传输，避免历史记录较多时把完整导出一次性加载进服务内存。
 
 ### 7.4 手动清理历史数据
@@ -519,10 +538,12 @@ unset AUDIT_TOKEN
 | `/api/summary?range=24h` | 汇总、速率、连接数和采集状态 |
 | `/api/timeseries?range=24h` | 流量趋势 |
 | `/api/top-destinations?range=24h` | 热门目标 |
+| `/api/config-usage?range=24h&page=1&limit=50` | 按配置文件聚合的区间用量 |
 | `/api/client-usage?range=24h&page=1&limit=50` | 按 IP、配置文件和 UUID/用户聚合的区间用量 |
 | `/api/connections?range=24h&page=1&limit=50` | 连接记录 |
 | `/api/export?format=csv&range=24h` | 导出连接记录 |
 | `/api/usage-export?format=csv&range=24h` | 导出 IP / 配置汇总用量 |
+| `/api/config-usage-export?format=csv&range=24h` | 导出配置文件汇总用量 |
 
 `range` 支持 `1h`、`6h`、`24h`、`7d`、`30d` 和 `all`。
 所有带时间范围的接口也支持同时传入 `start` 和 `end`，值可以是 Unix 秒级时间戳或
@@ -620,12 +641,12 @@ sing-box check -c /etc/sing-box/config.json -C /etc/sing-box/conf
 这是可能出现的正常现象：
 
 - 总流量来自 sing-box 核心累计计数，包含采集期间的全部字节。
-- IP / 配置用量与连接明细来自每秒活动连接采样，极短连接可能在两次采样之间完成。
-- IP / 配置用量按每次采集之间的连接字节增量归属时间，长连接不会把时间段外的累计值算入。
+- 配置汇总、IP / 配置用量与连接明细来自每秒活动连接采样，极短连接可能在两次采样之间完成。
+- 配置汇总和 IP / 配置用量按每次采集之间的连接字节增量归属时间，长连接不会把时间段外的累计值算入。
 - 无法识别来源 IP 或配置身份的流量仍会进入总流量，但只能在汇总表中显示为未知或未识别。
 
-做整机容量统计时以页面总流量和趋势为准；调查具体 IP、配置或 UUID 时使用 IP / 配置
-用量及其汇总导出；调查单条连接时使用连接明细与连接导出。
+做整机容量统计时以页面总流量和趋势为准；比较各配置时使用配置汇总；调查具体 IP、配置
+或 UUID 时使用 IP / 配置用量及其汇总导出；调查单条连接时使用连接明细与连接导出。
 
 ### 10.6 数据库持续增长
 

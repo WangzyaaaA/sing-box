@@ -10,6 +10,7 @@ audit_usage() {
     msg "   $is_core audit set <option> <value>             修改 listen/port/retention/interval/token"
     msg "   $is_core audit export [csv|json] [range] [file] 导出数据 (range: 1h/6h/24h/7d/30d/all)"
     msg "   $is_core audit report [csv|json] [range] [file] 按 IP/配置汇总并导出用量"
+    msg "   $is_core audit config-report [csv|json] [range] [file] 按配置文件汇总并导出用量"
     msg "   $is_core audit purge <days>                    删除指定天数以前的数据"
     msg "   $is_core audit disable                         停止并禁用服务, 保留配置和数据"
     msg "   $is_core audit uninstall [-y]                  卸载审计服务并删除全部审计数据\n"
@@ -353,7 +354,16 @@ audit_export() {
     local output=$3
     local view=$4
     local listen port token url endpoint=export name_part=connections
-    [[ $view == usage ]] && endpoint=usage-export && name_part=usage
+    case $view in
+    usage)
+        endpoint=usage-export
+        name_part=usage
+        ;;
+    config)
+        endpoint=config-usage-export
+        name_part=config-usage
+        ;;
+    esac
     [[ $format == csv || $format == json ]] || err "导出格式仅支持 csv 或 json."
     [[ $range =~ ^(1h|6h|24h|7d|30d|all)$ ]] || err "时间范围仅支持 1h/6h/24h/7d/30d/all."
     [[ ! $output ]] && output="$PWD/sing-box-audit-$name_part-$(date +%Y%m%d-%H%M%S).$format"
@@ -464,6 +474,9 @@ audit_main() {
         ;;
     report)
         audit_export "$2" "$3" "$4" usage
+        ;;
+    config-report)
+        audit_export "$2" "$3" "$4" config
         ;;
     purge)
         audit_purge "$2"

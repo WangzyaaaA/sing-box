@@ -24,7 +24,8 @@
 - 一键添加 Trojan-(WS/H2/HTTPUpgrade)-TLS
 - 一键启用 BBR
 - 可选流量审计服务与 Web 仪表盘
-- 按来源 IP、配置文件和 UUID/用户统计指定时间段流量
+- 按配置文件统计指定时间段的流量、来源 IP、用户和连接数
+- 按来源 IP、配置文件和 UUID/用户统计明细流量
 - 审计数据筛选、CSV/JSON 导出与自动保留
 - 一键更改伪装网站
 - 一键更改 (端口/UUID/密码/域名/路径/加密方式/SNI/等...)
@@ -150,9 +151,9 @@ Usage: sing-box [options]... [args]...
 
 流量审计是可选的独立服务，默认只监听 `127.0.0.1:9091`。它通过 sing-box 的本机
 Clash API 采集连接与上下行字节，使用 SQLite 持久化，并提供响应式 Web 页面、筛选、
-分页以及 CSV/JSON 导出。连接流量按采集周期保存增量，可按来源 IP、配置文件及可识别的
-UUID/用户汇总，并可选择预设或自定义时间段。默认保留 90 天数据；首次启用时才会安装
-Python 3，不影响未使用该功能的安装。
+分页以及 CSV/JSON 导出。连接流量按采集周期保存增量，既可按配置文件汇总，也可按来源
+IP、配置文件及可识别的 UUID/用户汇总，并可选择预设或自定义时间段。默认保留 90 天
+数据；首次启用时才会安装 Python 3，不影响未使用该功能的安装。
 
 ```bash
 # 启用并显示页面地址、访问令牌
@@ -170,6 +171,10 @@ sing-box audit export json 7d /root/audit.json
 # 按 IP / 配置汇总最近 7 天用量
 sing-box audit report csv 7d
 sing-box audit report json 7d /root/audit-usage.json
+
+# 按配置文件汇总最近 7 天用量
+sing-box audit config-report csv 7d
+sing-box audit config-report json 7d /root/audit-config-usage.json
 
 # 调整保留天数或采集间隔
 sing-box audit set retention 30

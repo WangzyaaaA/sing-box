@@ -75,6 +75,24 @@
 
       <section class="panel records-panel usage-panel">
         <div class="panel-heading records-heading">
+          <div><p class="eyebrow">CONFIG ACCOUNTING</p><h2>配置文件流量</h2></div>
+          <div class="filters">
+            <label><span class="sr-only">搜索配置文件</span><input id="configUsageSearch" type="search" placeholder="搜索配置文件…" autocomplete="off"></label>
+            <button class="button primary" id="configUsageExportCsv" type="button">导出 CSV</button>
+            <button class="button secondary" id="configUsageExportJson" type="button">导出 JSON</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="config-usage-table">
+            <thead><tr><th>配置文件</th><th>首次流量</th><th>最后流量</th><th class="number">来源 IP</th><th class="number">用户</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
+            <tbody id="configUsageRows"><tr><td colspan="9" class="empty-row">正在按配置文件统计流量…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pagination"><span id="configUsagePageInfo">第 1 页</span><div><button class="button secondary" id="configUsagePrevPage" type="button">上一页</button><button class="button secondary" id="configUsageNextPage" type="button">下一页</button></div></div>
+      </section>
+
+      <section class="panel records-panel usage-panel">
+        <div class="panel-heading records-heading">
           <div><p class="eyebrow">CLIENT ACCOUNTING</p><h2>IP / 配置流量</h2></div>
           <div class="filters">
             <label><span class="sr-only">搜索 IP 或配置</span><input id="usageSearch" type="search" placeholder="搜索 IP、配置文件、UUID…" autocomplete="off"></label>

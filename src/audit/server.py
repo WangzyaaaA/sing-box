@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
 
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.2.0"
 USAGE_BUCKET_SECONDS = 60
 RANGES = {
     "1h": 3600,
@@ -157,6 +157,10 @@ class AuditStore:
     )
     USAGE_EXPORT_COLUMNS = (
         "source_ip", "config_name", "user", "first_seen", "last_seen",
+        "connections", "upload", "download", "total",
+    )
+    CONFIG_USAGE_EXPORT_COLUMNS = (
+        "config_name", "first_seen", "last_seen", "clients", "users",
         "connections", "upload", "download", "total",
     )
 
@@ -589,6 +593,11 @@ class AuditStore:
             if value:
                 clauses.append(column + " = ?")
                 values.append(value)
+        config_search = params.get("config_search", [""])[0].strip()
+        if config_search:
+            pattern = "%{}%".format(config_search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+            clauses.append("config_name LIKE ? ESCAPE '\\'")
+            values.append(pattern)
         search = params.get("search", [""])[0].strip()
         if search:
             pattern = "%{}%".format(search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
@@ -618,6 +627,11 @@ class AuditStore:
             if value:
                 clauses.append(column + " = ?")
                 values.append(value)
+        config_search = params.get("config_search", [""])[0].strip()
+        if config_search:
+            pattern = "%{}%".format(config_search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+            clauses.append("config_name LIKE ? ESCAPE '\\'")
+            values.append(pattern)
         search = params.get("search", [""])[0].strip()
         if search:
             pattern = "%{}%".format(search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
@@ -655,6 +669,52 @@ class AuditStore:
         for row in rows:
             item = dict(row)
             item["connections"] = connection_counts.get((item["source_ip"], item["config_name"], item["user"]), 0)
+            item["first_seen_at"] = utc_iso(item["first_seen"])
+            item["last_seen_at"] = utc_iso(item["last_seen"])
+            items.append(item)
+        return {
+            "items": items, "page": page, "limit": limit, "total": total,
+            "pages": max(1, (total + limit - 1) // limit), "bucket_seconds": USAGE_BUCKET_SECONDS,
+        }
+
+    def _config_connection_count_map(self, params):
+        query, values = self._identity_connection_counts(params)
+        rows = self.db.execute(query, values).fetchall()
+        counts = {}
+        for row in rows:
+            config_name = row["config_name"]
+            counts[config_name] = counts.get(config_name, 0) + row["connections"]
+        return counts
+
+    @staticmethod
+    def _config_usage_select():
+        return (
+            "SELECT config_name, MIN(ts) AS first_seen, MAX(ts) AS last_seen, "
+            "COUNT(DISTINCT NULLIF(source_ip, '')) AS clients, "
+            "COUNT(DISTINCT NULLIF(user, '')) AS users, "
+            "SUM(upload) AS upload, SUM(download) AS download, "
+            "SUM(upload) + SUM(download) AS total FROM usage_samples WHERE "
+        )
+
+    def config_usage(self, params):
+        where, values = self._usage_where(params)
+        group = " GROUP BY config_name"
+        page = max(1, as_int(params.get("page", [1])[0], 1))
+        limit = clamp(as_int(params.get("limit", [50])[0], 50), 1, 200)
+        offset = (page - 1) * limit
+        with self.lock:
+            connection_counts = self._config_connection_count_map(params)
+            total = self.db.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM usage_samples WHERE " + where + group + ")", values
+            ).fetchone()[0]
+            rows = self.db.execute(
+                self._config_usage_select() + where + group + " ORDER BY total DESC, config_name LIMIT ? OFFSET ?",
+                values + [limit, offset],
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["connections"] = connection_counts.get(item["config_name"], 0)
             item["first_seen_at"] = utc_iso(item["first_seen"])
             item["last_seen_at"] = utc_iso(item["last_seen"])
             items.append(item)
@@ -738,6 +798,38 @@ class AuditStore:
                         output.write(b",\n")
                     item = dict(row)
                     item["connections"] = connection_counts.get((item["source_ip"], item["config_name"], item["user"]), 0)
+                    output.write(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+                    first = False
+                output.write(b"\n]\n")
+            return output.tell()
+
+    def write_config_usage_export(self, params, export_format, output):
+        where, values = self._usage_where(params)
+        query = self._config_usage_select() + where + " GROUP BY config_name ORDER BY total DESC, config_name"
+        with self.lock:
+            connection_counts = self._config_connection_count_map(params)
+            rows = self.db.execute(query, values)
+            if export_format == "csv":
+                output.write(b"\xef\xbb\xbf")
+                text_output = io.TextIOWrapper(output, encoding="utf-8", newline="", write_through=True)
+                writer = csv.DictWriter(
+                    text_output, fieldnames=list(self.CONFIG_USAGE_EXPORT_COLUMNS), extrasaction="ignore"
+                )
+                writer.writeheader()
+                for row in rows:
+                    item = dict(row)
+                    item["connections"] = connection_counts.get(item["config_name"], 0)
+                    writer.writerow(item)
+                text_output.flush()
+                text_output.detach()
+            else:
+                output.write(b"[\n")
+                first = True
+                for row in rows:
+                    if not first:
+                        output.write(b",\n")
+                    item = dict(row)
+                    item["connections"] = connection_counts.get(item["config_name"], 0)
                     output.write(json.dumps(item, ensure_ascii=False).encode("utf-8"))
                     first = False
                 output.write(b"\n]\n")
@@ -933,19 +1025,23 @@ class AuditHandler(BaseHTTPRequestHandler):
             self._json(self.server.store.options(range_name, start, end))
         elif parsed.path == "/api/client-usage":
             self._json(self.server.store.client_usage(params))
+        elif parsed.path == "/api/config-usage":
+            self._json(self.server.store.config_usage(params))
         elif parsed.path == "/api/connections":
             self._json(self.server.store.connections(params))
         elif parsed.path == "/api/usage-export":
             self._export(params, usage=True)
+        elif parsed.path == "/api/config-usage-export":
+            self._export(params, config_usage=True)
         elif parsed.path == "/api/export":
             self._export(params)
         else:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
-    def _export(self, params, usage=False):
+    def _export(self, params, usage=False, config_usage=False):
         export_format = params.get("format", ["csv"])[0].lower()
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        name_part = "usage" if usage else "connections"
+        name_part = "config-usage" if config_usage else ("usage" if usage else "connections")
         if export_format == "json":
             content_type = "application/json; charset=utf-8"
             filename = "sing-box-audit-{}-{}.json".format(name_part, stamp)
@@ -956,7 +1052,9 @@ class AuditHandler(BaseHTTPRequestHandler):
             self._json({"error": "invalid_format", "message": "仅支持 csv 或 json"}, HTTPStatus.BAD_REQUEST)
             return
         with tempfile.TemporaryFile(mode="w+b") as export_file:
-            if usage:
+            if config_usage:
+                size = self.server.store.write_config_usage_export(params, export_format, export_file)
+            elif usage:
                 size = self.server.store.write_usage_export(params, export_format, export_file)
             else:
                 size = self.server.store.write_export(params, export_format, export_file)
