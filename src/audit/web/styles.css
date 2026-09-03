@@ -26,6 +26,10 @@ button, select { cursor: pointer; }
 .brand strong { font-size: 16px; letter-spacing: -.02em; }
 .brand span { color: var(--muted); font-size: 12px; margin-top: 5px; }
 .top-actions, .filters { display: flex; align-items: center; gap: 9px; }
+.custom-range { display: flex; align-items: flex-end; gap: 8px; }
+.custom-range[hidden] { display: none; }
+.custom-range label { display: grid; gap: 3px; color: var(--muted); font-size: 10px; }
+.custom-range input { min-width: 178px; width: 178px; height: 38px; }
 .health { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; margin-right: 8px; }
 .health i { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 4px rgba(255,173,90,.12); }
 .health.ok i { background: var(--lime); box-shadow: 0 0 0 4px rgba(199,255,74,.12); }
@@ -78,6 +82,9 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.025em; }
 .destination-list .destination-value { color: var(--muted); font: 12px ui-monospace, monospace; }
 .destination-list .placeholder { display: flex; color: var(--muted); justify-content: center; }
 .records-heading { align-items: flex-end; }
+.usage-panel { margin-bottom: 18px; }
+.usage-table { min-width: 1180px; }
+.total-value { color: var(--text) !important; font-weight: 800; }
 .table-wrap { width: 100%; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 1120px; }
 th { color: #7f8c92; background: rgba(7,10,12,.34); font: 700 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; text-align: left; }
@@ -106,6 +113,7 @@ dialog input { width: 100%; }
 @media (max-width: 1040px) {
   .topbar { position: static; padding: 16px 4vw; align-items: flex-start; }
   .top-actions { justify-content: flex-end; flex-wrap: wrap; }
+  .custom-range { flex-basis: 100%; justify-content: flex-end; }
   .health, .range-label { display: none; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .metric:nth-child(2) { border-right: 0; }
@@ -118,7 +126,10 @@ dialog input { width: 100%; }
 @media (max-width: 700px) {
   .topbar { display: grid; }
   .top-actions { justify-content: flex-start; }
-  .top-actions .button.secondary, .range-label { display: none; }
+  .custom-range { justify-content: flex-start; flex-wrap: wrap; }
+  .custom-range label { flex: 1 1 150px; }
+  .custom-range input { width: 100%; min-width: 0; }
+  .top-actions > .button.secondary, .range-label { display: none; }
   main { padding-top: 34px; }
   .intro { display: grid; }
   .live-rate { text-align: left; }

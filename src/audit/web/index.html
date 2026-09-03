@@ -25,9 +25,15 @@
           <option value="7d">最近 7 天</option>
           <option value="30d">最近 30 天</option>
           <option value="all">全部</option>
+          <option value="custom">自定义时间段</option>
         </select>
+        <div class="custom-range" id="customRange" hidden>
+          <label><span>开始</span><input id="rangeStart" type="datetime-local" step="60"></label>
+          <label><span>结束</span><input id="rangeEnd" type="datetime-local" step="60"></label>
+          <button class="button secondary" id="applyRange" type="button">应用</button>
+        </div>
         <button class="button secondary" id="refresh" type="button">刷新</button>
-        <button class="button primary" id="exportCsv" type="button">导出 CSV</button>
+        <button class="button primary" id="exportCsv" type="button">导出连接 CSV</button>
       </div>
     </header>
 
@@ -36,7 +42,7 @@
         <div>
           <p class="eyebrow">TRAFFIC OBSERVATORY</p>
           <h1>连接看得见，流量有据可查。</h1>
-          <p>从本机 sing-box 管理接口采集数据，记录连接去向、用户、协议与上下行用量。</p>
+          <p>从本机 sing-box 管理接口采集数据，按来源 IP、配置文件和 UUID/用户审计上下行用量。</p>
         </div>
         <div class="live-rate" aria-label="当前速率">
           <span>当前速率</span>
@@ -65,6 +71,24 @@
           <div class="panel-heading"><div><p class="eyebrow">DESTINATIONS</p><h2>热门目标</h2></div></div>
           <ol class="destination-list" id="destinations"><li class="placeholder">暂无目标记录</li></ol>
         </article>
+      </section>
+
+      <section class="panel records-panel usage-panel">
+        <div class="panel-heading records-heading">
+          <div><p class="eyebrow">CLIENT ACCOUNTING</p><h2>IP / 配置流量</h2></div>
+          <div class="filters">
+            <label><span class="sr-only">搜索 IP 或配置</span><input id="usageSearch" type="search" placeholder="搜索 IP、配置文件、UUID…" autocomplete="off"></label>
+            <button class="button primary" id="usageExportCsv" type="button">导出 CSV</button>
+            <button class="button secondary" id="usageExportJson" type="button">导出 JSON</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="usage-table">
+            <thead><tr><th>来源 IP</th><th>配置文件</th><th>UUID / 用户</th><th>首次流量</th><th>最后流量</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
+            <tbody id="usageRows"><tr><td colspan="9" class="empty-row">正在统计 IP 与配置流量…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pagination"><span id="usagePageInfo">第 1 页</span><div><button class="button secondary" id="usagePrevPage" type="button">上一页</button><button class="button secondary" id="usageNextPage" type="button">下一页</button></div></div>
       </section>
 
       <section class="panel records-panel">
