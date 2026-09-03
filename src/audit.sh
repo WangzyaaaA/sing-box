@@ -2,7 +2,7 @@
 
 audit_usage() {
     msg "\n流量审计:"
-    msg "   $is_core audit enable [listen] [port]          启用审计服务 (默认 127.0.0.1:9091)"
+    msg "   $is_core audit enable [listen] [port]          启用审计或更新监听 (默认 127.0.0.1:9091)"
     msg "   $is_core audit status                          查看服务与采集状态"
     msg "   $is_core audit url                             显示前端访问地址"
     msg "   $is_core audit token                           显示前端访问令牌"
@@ -124,10 +124,19 @@ audit_controller_url() {
 
 audit_enable() {
     audit_require_root
-    local listen=${1:-127.0.0.1}
-    local port=${2:-9091}
+    local requested_listen=$1
+    local requested_port=$2
+    local listen=${requested_listen:-127.0.0.1}
+    local port=${requested_port:-9091}
     local controller controller_secret collector_url web_token managed_clash_api=false
-    local config_tmp core_backup core_changed
+    local config_tmp config_backup config_changed core_backup core_changed current_listen current_port
+
+    if [[ -f $is_audit_config ]]; then
+        current_listen=$(audit_config_get '.listen')
+        current_port=$(audit_config_get '.port')
+        [[ ! $requested_listen ]] && listen=$current_listen
+        [[ ! $requested_port ]] && port=$current_port
+    fi
 
     audit_validate_listen "$listen"
     audit_validate_port "$port"
@@ -136,12 +145,50 @@ audit_enable() {
 
     if [[ -f $is_audit_config ]]; then
         msg "\n检测到已有审计配置, 将重新安装并启动服务."
+        if [[ $requested_listen || $requested_port ]]; then
+            if [[ $port != "$current_port" && $(is_test port_used "$port") ]]; then
+                err "前端端口 ($port) 已被占用, 请指定其他端口: $is_core audit enable $listen <port>"
+            fi
+            config_backup=$(mktemp)
+            config_tmp=$(mktemp)
+            cp -f "$is_audit_config" "$config_backup"
+            if ! jq --arg listen "$listen" --argjson port "$port" \
+                '.listen = $listen | .port = $port' "$is_audit_config" >"$config_tmp"; then
+                rm -f "$config_tmp" "$config_backup"
+                err "更新审计监听配置失败."
+            fi
+            mv -f "$config_tmp" "$is_audit_config"
+            chmod 600 "$is_audit_config"
+            if ! python3 "$is_audit_server" --config "$is_audit_config" --check &>/dev/null; then
+                mv -f "$config_backup" "$is_audit_config"
+                err "新配置验证失败, 已恢复原配置."
+            fi
+            config_changed=1
+        fi
         load systemd.sh
         install_service "$is_audit_name" &>/dev/null
         audit_service_action enable quiet
-        audit_service_action restart quiet || audit_service_action start quiet
+        if ! audit_service_action restart quiet && ! audit_service_action start quiet; then
+            if [[ $config_changed ]]; then
+                mv -f "$config_backup" "$is_audit_config"
+                audit_service_action restart quiet
+                err "审计服务无法使用新监听配置启动, 已恢复原配置."
+            fi
+            err "审计服务启动失败, 请运行: $is_core audit status"
+        fi
         sleep 1
-        [[ $(pgrep -f "$is_audit_server --config $is_audit_config") ]] || err "审计服务启动失败, 请运行: $is_core audit status"
+        if [[ ! $(pgrep -f "$is_audit_server --config $is_audit_config") ]]; then
+            if [[ $config_changed ]]; then
+                mv -f "$config_backup" "$is_audit_config"
+                audit_service_action restart quiet
+                err "审计服务无法使用新监听配置启动, 已恢复原配置."
+            fi
+            err "审计服务启动失败, 请运行: $is_core audit status"
+        fi
+        [[ $config_changed ]] && {
+            rm -f "$config_backup"
+            _green "\n审计监听已更新: $listen:$port\n"
+        }
         audit_status
         return
     fi

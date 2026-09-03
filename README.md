@@ -47,6 +47,8 @@
 
 # 一键安装
 
+## 全新服务器
+
 在受支持的 Linux 服务器上以 `root` 身份执行：
 
 ```bash
@@ -69,15 +71,23 @@ bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/inst
 bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --no-audit
 ```
 
-如果服务器原来安装的是 `233boy/sing-box`，先执行一次脚本源迁移：
+## 已安装原版脚本
+
+如果服务器已经使用 `233boy/sing-box` 安装，执行下面的一条命令即可更新管理脚本并启用审计：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --script-update
-sing-box audit enable
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --script-update && sing-box audit enable
+```
+
+如需迁移时直接监听指定地址和端口，可把最后一段改为：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --script-update && sing-box audit enable 0.0.0.0 9091
 ```
 
 这个操作只覆盖 `/etc/sing-box/sh` 中的管理脚本，不重装 sing-box，不修改现有代理配置，
-也不会删除审计数据库。迁移后可继续使用 `sing-box update.sh` 获取本仓库的新版本。
+也不会删除已有审计数据库。若原配置尚未启用 Clash API，`audit enable` 会添加仅监听本机的
+管理接口并重启一次 sing-box。迁移后可继续使用 `sing-box update.sh` 获取本仓库的新版本。
 
 # 文档
 
@@ -158,15 +168,16 @@ Usage: sing-box [options]... [args]...
 
 完整说明请参阅：[流量审计部署与使用](docs/traffic-audit.md)。
 
-流量审计是可选的独立服务，默认只监听 `127.0.0.1:9091`。它通过 sing-box 的本机
+流量审计是全新安装时默认启用的独立服务，默认只监听 `127.0.0.1:9091`。它通过 sing-box 的本机
 Clash API 采集连接与上下行字节，使用 SQLite 持久化，并提供响应式 Web 页面、筛选、
 分页以及 CSV/JSON 导出。连接流量按采集周期保存增量，既可按配置文件汇总，也可按来源
 IP、配置文件及可识别的 UUID/用户汇总，并可选择预设或自定义时间段。默认保留 90 天
-数据；首次启用时才会安装 Python 3，不影响未使用该功能的安装。
+数据。启用审计时会按需安装 Python 3；使用安装参数 `--no-audit` 时不会安装该依赖。
 
 ```bash
-# 启用并显示页面地址、访问令牌
+# 全新安装会自动启用；已有配置重复执行时可同时更新监听地址和端口
 sing-box audit enable
+sing-box audit enable 0.0.0.0 9091
 
 # 查看状态、页面地址和令牌
 sing-box audit status
