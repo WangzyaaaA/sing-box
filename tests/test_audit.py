@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,7 +20,7 @@ audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
 
 
-def connection(connection_id="conn-1", upload=10, download=20):
+def connection(connection_id="conn-1", upload=10, download=20, source_ip="198.51.100.10"):
     return {
         "id": connection_id,
         "start": "2026-08-26T01:00:00Z",
@@ -31,7 +32,7 @@ def connection(connection_id="conn-1", upload=10, download=20):
             "network": "tcp",
             "type": "vless",
             "inbound": "vless-in",
-            "sourceIP": "198.51.100.10",
+            "sourceIP": source_ip,
             "sourcePort": 41000,
             "destinationIP": "203.0.113.20",
             "destinationPort": 443,
@@ -89,6 +90,90 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(summary["upload"], 25)
         self.assertEqual(summary["download"], 50)
         self.assertEqual(records["items"][0]["upload"], 35)
+
+    def test_client_usage_is_grouped_by_ip_identity_and_time_window(self):
+        with mock.patch.object(audit.time, "time", return_value=4020):
+            self.store.capture({"uploadTotal": 100, "downloadTotal": 200, "connections": [connection()]})
+        with mock.patch.object(audit.time, "time", return_value=4082):
+            self.store.capture({"uploadTotal": 130, "downloadTotal": 260, "connections": [connection(upload=40, download=80)]})
+        with mock.patch.object(audit.time, "time", return_value=4143):
+            self.store.capture({
+                "uploadTotal": 135,
+                "downloadTotal": 266,
+                "connections": [
+                    connection(upload=40, download=80),
+                    connection("conn-2", upload=5, download=6),
+                ],
+            })
+            first_window = self.store.client_usage({"range": ["24h"], "start": ["4082"], "end": ["4082"]})
+            full_window = self.store.client_usage({"range": ["24h"], "start": ["4082"], "end": ["4143"]})
+
+        self.assertEqual(first_window["items"][0]["upload"], 30)
+        self.assertEqual(first_window["items"][0]["download"], 60)
+        self.assertEqual(full_window["items"][0]["upload"], 35)
+        self.assertEqual(full_window["items"][0]["download"], 66)
+        self.assertEqual(full_window["items"][0]["connections"], 2)
+        self.assertEqual(full_window["items"][0]["source_ip"], "198.51.100.10")
+
+    def test_config_resolver_maps_inbound_to_file_and_uuid(self):
+        config_dir = Path(self.temp.name) / "conf"
+        config_dir.mkdir()
+        config_name = "vless-443.json"
+        config_dir.joinpath(config_name).write_text(json.dumps({
+            "inbounds": [{
+                "tag": config_name,
+                "type": "vless",
+                "users": [{"uuid": "11111111-1111-4111-8111-111111111111"}],
+            }],
+        }), encoding="utf-8")
+        resolver = audit.ConfigIdentityResolver(str(config_dir))
+        item = connection()
+        item["metadata"].pop("inbound")
+        item["metadata"].pop("user")
+        item["metadata"]["type"] = "vless/" + config_name
+
+        with mock.patch.object(audit.time, "time", return_value=5000):
+            self.store.capture({"uploadTotal": 0, "downloadTotal": 0, "connections": [item]}, resolver)
+            records = self.store.connections({"range": ["1h"]})
+
+        self.assertEqual(records["items"][0]["config_name"], config_name)
+        self.assertEqual(records["items"][0]["user"], "11111111-1111-4111-8111-111111111111")
+        self.assertEqual(records["items"][0]["protocol"], "vless")
+
+    def test_config_resolver_never_uses_password_as_identity(self):
+        config_dir = Path(self.temp.name) / "conf-password"
+        config_dir.mkdir()
+        config_name = "trojan-443.json"
+        config_dir.joinpath(config_name).write_text(json.dumps({
+            "inbounds": [{"tag": config_name, "type": "trojan", "users": [{"password": "synthetic-secret"}]}],
+        }), encoding="utf-8")
+        resolver = audit.ConfigIdentityResolver(str(config_dir))
+
+        resolved_config, resolved_user = resolver.resolve(config_name, "")
+
+        self.assertEqual(resolved_config, config_name)
+        self.assertEqual(resolved_user, "")
+
+    def test_existing_database_is_migrated_without_losing_connections(self):
+        self.store.close()
+        database = os.path.join(self.temp.name, "legacy.db")
+        db = sqlite3.connect(database)
+        db.execute("CREATE TABLE connections (id TEXT PRIMARY KEY, start_time INTEGER NOT NULL, end_time INTEGER, "
+                   "last_seen INTEGER NOT NULL, status TEXT NOT NULL, network TEXT NOT NULL DEFAULT '', "
+                   "inbound TEXT NOT NULL DEFAULT '', inbound_type TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '', "
+                   "source_port INTEGER NOT NULL DEFAULT 0, destination TEXT NOT NULL DEFAULT '', destination_ip TEXT NOT NULL DEFAULT '', "
+                   "destination_port INTEGER NOT NULL DEFAULT 0, host TEXT NOT NULL DEFAULT '', user TEXT NOT NULL DEFAULT '', "
+                   "protocol TEXT NOT NULL DEFAULT '', process TEXT NOT NULL DEFAULT '', outbound TEXT NOT NULL DEFAULT '', "
+                   "chains TEXT NOT NULL DEFAULT '[]', rule TEXT NOT NULL DEFAULT '', upload INTEGER NOT NULL DEFAULT 0, "
+                   "download INTEGER NOT NULL DEFAULT 0)")
+        db.execute("INSERT INTO connections (id, start_time, last_seen, status) VALUES ('legacy', 1, 2, 'closed')")
+        db.commit()
+        db.close()
+
+        self.store = audit.AuditStore(database, 90)
+        columns = {row[1] for row in self.store.db.execute("PRAGMA table_info(connections)")}
+        self.assertIn("config_name", columns)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM connections").fetchone()[0], 1)
 
 
 class FakeClashHandler(BaseHTTPRequestHandler):
@@ -167,7 +252,33 @@ class HttpIntegrationTests(unittest.TestCase):
             exported = json.load(response)
             self.assertEqual(exported[0]["host"], "example.com")
         with self.request("/") as response:
-            self.assertIn("连接审计记录", response.read().decode("utf-8"))
+            page = response.read().decode("utf-8")
+            self.assertIn("连接审计记录", page)
+            self.assertIn("IP / 配置流量", page)
+
+    def test_usage_api_custom_range_and_export(self):
+        self.server.collector.stop()
+        captured_at = int(time.time())
+        with mock.patch.object(audit.time, "time", return_value=captured_at):
+            self.server.store.capture({
+                "uploadTotal": 130,
+                "downloadTotal": 260,
+                "connections": [connection(upload=40, download=80)],
+            })
+        query = "?start={}&end={}".format(captured_at - 1, captured_at + 1)
+        with self.request("/api/client-usage" + query, "test-web-token-123456") as response:
+            payload = json.load(response)
+            self.assertEqual(payload["items"][0]["source_ip"], "198.51.100.10")
+            self.assertEqual(payload["items"][0]["total"], 90)
+            self.assertEqual(payload["bucket_seconds"], 60)
+        with self.request("/api/usage-export" + query + "&format=csv", "test-web-token-123456") as response:
+            body = response.read().decode("utf-8-sig")
+            self.assertIn("source_ip,config_name,user", body)
+            self.assertIn("198.51.100.10", body)
+        with self.assertRaises(HTTPError) as invalid:
+            self.request("/api/client-usage?start=invalid&end=10", "test-web-token-123456")
+        self.assertEqual(invalid.exception.code, 400)
+        invalid.exception.close()
 
 
 if __name__ == "__main__":

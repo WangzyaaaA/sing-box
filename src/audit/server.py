@@ -9,6 +9,7 @@ dashboard/API.  It intentionally uses only the Python standard library.
 import argparse
 import csv
 import datetime
+import glob
 import hmac
 import io
 import json
@@ -28,7 +29,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import ProxyHandler, Request, build_opener
 
 
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.1.0"
+USAGE_BUCKET_SECONDS = 60
 RANGES = {
     "1h": 3600,
     "6h": 21600,
@@ -48,6 +50,8 @@ def parse_timestamp(value, fallback):
     if not value:
         return fallback
     if isinstance(value, (int, float)):
+        return int(value)
+    if re.fullmatch(r"[0-9]+", str(value)):
         return int(value)
     match = re.match(
         r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
@@ -84,12 +88,76 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
+class ConfigIdentityResolver:
+    """Resolve an inbound tag to its local config file and non-secret user ID."""
+
+    def __init__(self, config_dir):
+        self.config_dir = os.path.abspath(config_dir) if config_dir else ""
+        self.entries = {}
+        self.last_refresh = 0
+
+    @staticmethod
+    def _user_identity(user):
+        # UUID is the only credential intentionally exposed as an audit identity.
+        # Passwords are never copied into the audit database or dashboard.
+        return str(user.get("uuid") or user.get("name") or user.get("username") or "")
+
+    def _refresh(self):
+        now = time.monotonic()
+        if self.last_refresh and now - self.last_refresh < 5:
+            return
+        self.last_refresh = now
+        entries = {}
+        if not self.config_dir or not os.path.isdir(self.config_dir):
+            self.entries = entries
+            return
+        for path in glob.glob(os.path.join(self.config_dir, "*.json")):
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    config = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            config_name = os.path.basename(path)
+            for inbound in config.get("inbounds") or []:
+                if not isinstance(inbound, dict):
+                    continue
+                tag = str(inbound.get("tag") or config_name)
+                users = [user for user in (inbound.get("users") or []) if isinstance(user, dict)]
+                named_users = {
+                    str(user.get("name") or user.get("username") or ""): self._user_identity(user)
+                    for user in users
+                    if user.get("name") or user.get("username")
+                }
+                identities = [self._user_identity(user) for user in users]
+                identities = [identity for identity in identities if identity]
+                entries[tag] = {
+                    "config_name": config_name,
+                    "named_users": named_users,
+                    "single_identity": identities[0] if len(identities) == 1 else "",
+                }
+        self.entries = entries
+
+    def resolve(self, inbound, api_user):
+        self._refresh()
+        inbound = os.path.basename(str(inbound or ""))
+        api_user = str(api_user or "")
+        entry = self.entries.get(inbound)
+        if not entry:
+            return inbound, api_user
+        user = entry["named_users"].get(api_user, api_user) if api_user else entry["single_identity"]
+        return entry["config_name"], user
+
+
 class AuditStore:
     CONNECTION_COLUMNS = (
         "id", "start_time", "end_time", "last_seen", "status", "network",
-        "inbound", "inbound_type", "source_ip", "source_port", "destination",
+        "inbound", "inbound_type", "config_name", "source_ip", "source_port", "destination",
         "destination_ip", "destination_port", "host", "user", "protocol",
         "process", "outbound", "chains", "rule", "upload", "download",
+    )
+    USAGE_EXPORT_COLUMNS = (
+        "source_ip", "config_name", "user", "first_seen", "last_seen",
+        "connections", "upload", "download", "total",
     )
 
     def __init__(self, database, retention_days):
@@ -127,6 +195,7 @@ class AuditStore:
                     network TEXT NOT NULL DEFAULT '',
                     inbound TEXT NOT NULL DEFAULT '',
                     inbound_type TEXT NOT NULL DEFAULT '',
+                    config_name TEXT NOT NULL DEFAULT '',
                     source_ip TEXT NOT NULL DEFAULT '',
                     source_port INTEGER NOT NULL DEFAULT 0,
                     destination TEXT NOT NULL DEFAULT '',
@@ -142,6 +211,22 @@ class AuditStore:
                     upload INTEGER NOT NULL DEFAULT 0,
                     download INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS usage_samples (
+                    ts INTEGER NOT NULL,
+                    source_ip TEXT NOT NULL DEFAULT '',
+                    config_name TEXT NOT NULL DEFAULT '',
+                    user TEXT NOT NULL DEFAULT '',
+                    upload INTEGER NOT NULL DEFAULT 0,
+                    download INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (ts, source_ip, config_name, user)
+                );
+                CREATE TABLE IF NOT EXISTS destination_samples (
+                    ts INTEGER NOT NULL,
+                    destination TEXT NOT NULL,
+                    upload INTEGER NOT NULL DEFAULT 0,
+                    download INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (ts, destination)
+                );
                 CREATE TABLE IF NOT EXISTS state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -151,8 +236,18 @@ class AuditStore:
                 CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status);
                 CREATE INDEX IF NOT EXISTS idx_connections_user ON connections(user);
                 CREATE INDEX IF NOT EXISTS idx_connections_host ON connections(host);
+                CREATE INDEX IF NOT EXISTS idx_usage_samples_ts ON usage_samples(ts);
+                CREATE INDEX IF NOT EXISTS idx_usage_samples_source_ip ON usage_samples(source_ip, ts);
+                CREATE INDEX IF NOT EXISTS idx_usage_samples_config_name ON usage_samples(config_name, ts);
+                CREATE INDEX IF NOT EXISTS idx_usage_samples_user ON usage_samples(user, ts);
+                CREATE INDEX IF NOT EXISTS idx_destination_samples_ts ON destination_samples(ts);
                 """
             )
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(connections)").fetchall()}
+            if "config_name" not in columns:
+                self.db.execute("ALTER TABLE connections ADD COLUMN config_name TEXT NOT NULL DEFAULT ''")
+            self.db.execute("UPDATE connections SET config_name = inbound WHERE config_name = '' AND inbound != ''")
+            self.db.execute("CREATE INDEX IF NOT EXISTS idx_connections_config_name ON connections(config_name)")
 
     def close(self):
         with self.lock:
@@ -166,32 +261,44 @@ class AuditStore:
         self.db.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)", (key, str(value)))
 
     @staticmethod
-    def _connection_record(connection, now):
+    def _connection_record(connection, now, resolver=None):
         metadata = connection.get("metadata") or {}
         chains = connection.get("chains") or []
         if not isinstance(chains, list):
             chains = [str(chains)]
+        raw_type = str(metadata.get("type") or metadata.get("inboundType") or "")
+        inbound_type = str(metadata.get("inboundType") or "")
+        inbound = str(metadata.get("inbound") or metadata.get("inboundName") or "")
+        if "/" in raw_type:
+            type_name, type_tag = raw_type.split("/", 1)
+            inbound_type = inbound_type or type_name
+            inbound = inbound or type_tag
+        else:
+            inbound_type = inbound_type or raw_type
+        api_user = str(metadata.get("user") or metadata.get("inboundUser") or "")
+        config_name, user = resolver.resolve(inbound, api_user) if resolver else (inbound, api_user)
         destination_ip = str(metadata.get("destinationIP") or metadata.get("remoteDestination") or "")
         host = str(metadata.get("host") or metadata.get("sniffHost") or "")
         destination = host or destination_ip
         outbound = str(chains[0]) if chains else ""
         return {
             "id": str(connection.get("id") or ""),
-            "start_time": parse_timestamp(connection.get("start"), now),
+            "start_time": min(parse_timestamp(connection.get("start"), now), now),
             "end_time": None,
             "last_seen": now,
             "status": "active",
             "network": str(metadata.get("network") or ""),
-            "inbound": str(metadata.get("inbound") or ""),
-            "inbound_type": str(metadata.get("inboundType") or metadata.get("type") or ""),
+            "inbound": inbound,
+            "inbound_type": inbound_type,
+            "config_name": config_name,
             "source_ip": str(metadata.get("sourceIP") or ""),
             "source_port": as_int(metadata.get("sourcePort")),
             "destination": destination,
             "destination_ip": destination_ip,
             "destination_port": as_int(metadata.get("destinationPort")),
             "host": host,
-            "user": str(metadata.get("user") or ""),
-            "protocol": str(metadata.get("type") or metadata.get("inboundType") or ""),
+            "user": user,
+            "protocol": inbound_type,
             "process": str(metadata.get("processPath") or metadata.get("process") or ""),
             "outbound": outbound,
             "chains": json.dumps(chains, ensure_ascii=False, separators=(",", ":")),
@@ -200,16 +307,19 @@ class AuditStore:
             "download": max(0, as_int(connection.get("download"))),
         }
 
-    def capture(self, snapshot):
+    def capture(self, snapshot, resolver=None):
         now = int(time.time())
         connections = snapshot.get("connections") or []
         upload_total = max(0, as_int(snapshot.get("uploadTotal")))
         download_total = max(0, as_int(snapshot.get("downloadTotal")))
         active_ids = set()
+        usage_deltas = {}
+        destination_deltas = {}
 
         with self.lock, self.db:
             old_upload = self._state_get("collector_upload_total")
             old_download = self._state_get("collector_download_total")
+            initial_snapshot = old_upload is None and old_download is None
             upload_delta = 0 if old_upload is None else (upload_total - as_int(old_upload) if upload_total >= as_int(old_upload) else upload_total)
             download_delta = 0 if old_download is None else (download_total - as_int(old_download) if download_total >= as_int(old_download) else download_total)
             upload_delta = max(0, upload_delta)
@@ -227,13 +337,22 @@ class AuditStore:
             self._state_set("collector_last_success", now)
 
             for connection in connections:
-                record = self._connection_record(connection, now)
+                record = self._connection_record(connection, now, resolver)
                 if not record["id"]:
                     continue
                 active_ids.add(record["id"])
-                existing = self.db.execute("SELECT start_time FROM connections WHERE id = ?", (record["id"],)).fetchone()
+                existing = self.db.execute(
+                    "SELECT start_time, upload, download FROM connections WHERE id = ?", (record["id"],)
+                ).fetchone()
                 if existing:
                     record["start_time"] = existing["start_time"]
+                    upload_delta = record["upload"] - existing["upload"] if record["upload"] >= existing["upload"] else record["upload"]
+                    download_delta = record["download"] - existing["download"] if record["download"] >= existing["download"] else record["download"]
+                elif initial_snapshot:
+                    upload_delta = download_delta = 0
+                else:
+                    upload_delta = record["upload"]
+                    download_delta = record["download"]
                 placeholders = ",".join("?" for _ in self.CONNECTION_COLUMNS)
                 values = [record[column] for column in self.CONNECTION_COLUMNS]
                 self.db.execute(
@@ -241,6 +360,44 @@ class AuditStore:
                         ",".join(self.CONNECTION_COLUMNS), placeholders
                     ),
                     values,
+                )
+                if upload_delta or download_delta:
+                    usage_key = (record["source_ip"], record["config_name"], record["user"])
+                    old_usage = usage_deltas.get(usage_key, (0, 0))
+                    usage_deltas[usage_key] = (old_usage[0] + upload_delta, old_usage[1] + download_delta)
+                    if record["destination"]:
+                        old_destination = destination_deltas.get(record["destination"], (0, 0))
+                        destination_deltas[record["destination"]] = (
+                            old_destination[0] + upload_delta, old_destination[1] + download_delta,
+                        )
+
+            sample_ts = (now // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
+            for (source_ip, config_name, user), (sample_upload, sample_download) in usage_deltas.items():
+                sample = self.db.execute(
+                    "SELECT upload, download FROM usage_samples "
+                    "WHERE ts = ? AND source_ip = ? AND config_name = ? AND user = ?",
+                    (sample_ts, source_ip, config_name, user),
+                ).fetchone()
+                if sample:
+                    sample_upload += sample["upload"]
+                    sample_download += sample["download"]
+                self.db.execute(
+                    "INSERT OR REPLACE INTO usage_samples "
+                    "(ts, source_ip, config_name, user, upload, download) VALUES (?, ?, ?, ?, ?, ?)",
+                    (sample_ts, source_ip, config_name, user, sample_upload, sample_download),
+                )
+            for destination, (sample_upload, sample_download) in destination_deltas.items():
+                sample = self.db.execute(
+                    "SELECT upload, download FROM destination_samples WHERE ts = ? AND destination = ?",
+                    (sample_ts, destination),
+                ).fetchone()
+                if sample:
+                    sample_upload += sample["upload"]
+                    sample_download += sample["download"]
+                self.db.execute(
+                    "INSERT OR REPLACE INTO destination_samples "
+                    "(ts, destination, upload, download) VALUES (?, ?, ?, ?)",
+                    (sample_ts, destination, sample_upload, sample_download),
                 )
 
             current_rows = self.db.execute("SELECT id FROM connections WHERE status = 'active'").fetchall()
@@ -262,7 +419,12 @@ class AuditStore:
         connections = self.db.execute(
             "DELETE FROM connections WHERE status != 'active' AND last_seen < ?", (cutoff,)
         ).rowcount
-        return {"samples": samples, "connections": connections, "cutoff": cutoff}
+        usage_samples = self.db.execute("DELETE FROM usage_samples WHERE ts < ?", (cutoff,)).rowcount
+        destination_samples = self.db.execute("DELETE FROM destination_samples WHERE ts < ?", (cutoff,)).rowcount
+        return {
+            "samples": samples, "usage_samples": usage_samples, "destination_samples": destination_samples,
+            "connections": connections, "cutoff": cutoff,
+        }
 
     def purge(self, days):
         with self.lock, self.db:
@@ -274,14 +436,42 @@ class AuditStore:
             return 0
         return int(time.time()) - RANGES.get(range_name, RANGES["24h"])
 
-    def summary(self, range_name):
+    @staticmethod
+    def time_window(range_name, start=None, end=None):
         now = int(time.time())
-        since = self.since_for_range(range_name)
+        if start or end:
+            if not start or not end:
+                raise ValueError("自定义时间段必须同时提供 start 和 end")
+            since = parse_timestamp(start, None)
+            until = parse_timestamp(end, None)
+            if since is None or until is None:
+                raise ValueError("start 或 end 时间格式无效")
+            if since > until:
+                raise ValueError("start 不能晚于 end")
+            try:
+                datetime.datetime.fromtimestamp(since, datetime.timezone.utc)
+                datetime.datetime.fromtimestamp(until, datetime.timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                raise ValueError("start 或 end 超出支持的时间范围")
+            return since, until
+        return AuditStore.since_for_range(range_name), now
+
+    @staticmethod
+    def _params_window(params):
+        return AuditStore.time_window(
+            params.get("range", ["24h"])[0],
+            params.get("start", [None])[0],
+            params.get("end", [None])[0],
+        )
+
+    def summary(self, range_name, start=None, end=None):
+        now = int(time.time())
+        since, until = self.time_window(range_name, start, end)
         with self.lock:
             totals = self.db.execute(
                 "SELECT COALESCE(SUM(upload), 0) AS upload, COALESCE(SUM(download), 0) AS download "
-                "FROM traffic_samples WHERE ts >= ?",
-                (since,),
+                "FROM traffic_samples WHERE ts BETWEEN ? AND ?",
+                (since, until),
             ).fetchone()
             recent = self.db.execute(
                 "SELECT COALESCE(SUM(upload), 0) AS upload, COALESCE(SUM(download), 0) AS download, "
@@ -293,12 +483,14 @@ class AuditStore:
                 "SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active, "
                 "COUNT(DISTINCT NULLIF(source_ip, '')) AS clients, "
                 "COUNT(DISTINCT NULLIF(CASE WHEN host != '' THEN host ELSE destination END, '')) AS destinations "
-                "FROM connections WHERE last_seen >= ?",
-                (since,),
+                "FROM connections WHERE start_time <= ? AND last_seen >= ?",
+                (until, since),
             ).fetchone()
         elapsed = max(1, (recent["last_ts"] or now) - (recent["first_ts"] or now) + 1)
         return {
             "range": range_name,
+            "start": utc_iso(since),
+            "end": utc_iso(until),
             "upload": totals["upload"],
             "download": totals["download"],
             "total": totals["upload"] + totals["download"],
@@ -310,15 +502,20 @@ class AuditStore:
             "unique_destinations": counts["destinations"] or 0,
         }
 
-    def timeseries(self, range_name, bucket=None):
-        since = self.since_for_range(range_name)
+    def timeseries(self, range_name, bucket=None, start=None, end=None):
+        since, until = self.time_window(range_name, start, end)
         default_buckets = {"1h": 60, "6h": 300, "24h": 900, "7d": 3600, "30d": 21600, "all": 86400}
-        bucket = clamp(as_int(bucket, default_buckets.get(range_name, 900)), 10, 604800)
+        if start or end:
+            duration = max(1, until - since)
+            default_bucket = max(10, duration // 96)
+        else:
+            default_bucket = default_buckets.get(range_name, 900)
+        bucket = clamp(as_int(bucket, default_bucket), 10, 604800)
         with self.lock:
             rows = self.db.execute(
                 "SELECT (ts / ?) * ? AS bucket, SUM(upload) AS upload, SUM(download) AS download "
-                "FROM traffic_samples WHERE ts >= ? GROUP BY bucket ORDER BY bucket",
-                (bucket, bucket, since),
+                "FROM traffic_samples WHERE ts BETWEEN ? AND ? GROUP BY bucket ORDER BY bucket",
+                (bucket, bucket, since, until),
             ).fetchall()
         return {
             "bucket_seconds": bucket,
@@ -328,36 +525,43 @@ class AuditStore:
             ],
         }
 
-    def top_destinations(self, range_name, limit=8):
-        since = self.since_for_range(range_name)
+    def top_destinations(self, range_name, limit=8, start=None, end=None):
+        since, until = self.time_window(range_name, start, end)
+        since = (since // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
+        until = (until // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
         limit = clamp(as_int(limit, 8), 1, 50)
         with self.lock:
             rows = self.db.execute(
-                "SELECT CASE WHEN host != '' THEN host WHEN destination != '' THEN destination ELSE destination_ip END AS name, "
-                "SUM(upload) AS upload, SUM(download) AS download, COUNT(*) AS connections "
-                "FROM connections WHERE last_seen >= ? GROUP BY name HAVING name != '' "
+                "SELECT destination AS name, SUM(upload) AS upload, SUM(download) AS download, 0 AS connections "
+                "FROM destination_samples WHERE ts BETWEEN ? AND ? GROUP BY destination HAVING destination != '' "
                 "ORDER BY (SUM(upload) + SUM(download)) DESC LIMIT ?",
-                (since, limit),
+                (since, until, limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def options(self, range_name):
-        since = self.since_for_range(range_name)
+    def options(self, range_name, start=None, end=None):
+        since, until = self.time_window(range_name, start, end)
         with self.lock:
             protocols = [row[0] for row in self.db.execute(
-                "SELECT DISTINCT protocol FROM connections WHERE last_seen >= ? AND protocol != '' ORDER BY protocol", (since,)
+                "SELECT DISTINCT protocol FROM connections WHERE start_time <= ? AND last_seen >= ? "
+                "AND protocol != '' ORDER BY protocol", (until, since)
             ).fetchall()]
             users = [row[0] for row in self.db.execute(
-                "SELECT DISTINCT user FROM connections WHERE last_seen >= ? AND user != '' ORDER BY user", (since,)
+                "SELECT DISTINCT user FROM connections WHERE start_time <= ? AND last_seen >= ? "
+                "AND user != '' ORDER BY user", (until, since)
             ).fetchall()]
-        return {"protocols": protocols, "users": users}
+            configs = [row[0] for row in self.db.execute(
+                "SELECT DISTINCT config_name FROM connections WHERE start_time <= ? AND last_seen >= ? "
+                "AND config_name != '' ORDER BY config_name", (until, since)
+            ).fetchall()]
+        return {"protocols": protocols, "users": users, "configs": configs}
 
     @staticmethod
     def _connection_where(params):
-        range_name = params.get("range", ["24h"])[0]
-        clauses = ["last_seen >= ?"]
-        values = [AuditStore.since_for_range(range_name)]
-        for key, column in (("status", "status"), ("protocol", "protocol"), ("user", "user")):
+        since, until = AuditStore._params_window(params)
+        clauses = ["start_time <= ?", "last_seen >= ?"]
+        values = [until, since]
+        for key, column in (("status", "status"), ("protocol", "protocol"), ("user", "user"), ("config", "config_name")):
             value = params.get(key, [""])[0].strip()
             if value:
                 clauses.append(column + " = ?")
@@ -367,10 +571,97 @@ class AuditStore:
             pattern = "%{}%".format(search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
             clauses.append(
                 "(source_ip LIKE ? ESCAPE '\\' OR destination LIKE ? ESCAPE '\\' OR destination_ip LIKE ? ESCAPE '\\' "
-                "OR host LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR inbound LIKE ? ESCAPE '\\' OR process LIKE ? ESCAPE '\\')"
+                "OR host LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\' OR inbound LIKE ? ESCAPE '\\' "
+                "OR config_name LIKE ? ESCAPE '\\' OR process LIKE ? ESCAPE '\\')"
             )
-            values.extend([pattern] * 7)
+            values.extend([pattern] * 8)
         return " AND ".join(clauses), values
+
+    @staticmethod
+    def _usage_where(params):
+        since, until = AuditStore._params_window(params)
+        since = (since // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
+        until = (until // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
+        clauses = ["ts BETWEEN ? AND ?"]
+        values = [since, until]
+        for key, column in (("source_ip", "source_ip"), ("config", "config_name"), ("user", "user")):
+            value = params.get(key, [""])[0].strip()
+            if value:
+                clauses.append(column + " = ?")
+                values.append(value)
+        search = params.get("search", [""])[0].strip()
+        if search:
+            pattern = "%{}%".format(search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+            clauses.append(
+                "(source_ip LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')"
+            )
+            values.extend([pattern] * 3)
+        return " AND ".join(clauses), values
+
+    @staticmethod
+    def _usage_select():
+        return (
+            "SELECT source_ip, config_name, user, MIN(ts) AS first_seen, MAX(ts) AS last_seen, "
+            "SUM(upload) AS upload, SUM(download) AS download, "
+            "SUM(upload) + SUM(download) AS total FROM usage_samples WHERE "
+        )
+
+    @staticmethod
+    def _identity_connection_counts(params):
+        since, until = AuditStore._params_window(params)
+        since = (since // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
+        until = (until // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS + USAGE_BUCKET_SECONDS - 1
+        clauses = ["start_time <= ?", "last_seen >= ?"]
+        values = [until, since]
+        for key, column in (("source_ip", "source_ip"), ("config", "config_name"), ("user", "user")):
+            value = params.get(key, [""])[0].strip()
+            if value:
+                clauses.append(column + " = ?")
+                values.append(value)
+        search = params.get("search", [""])[0].strip()
+        if search:
+            pattern = "%{}%".format(search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+            clauses.append(
+                "(source_ip LIKE ? ESCAPE '\\' OR config_name LIKE ? ESCAPE '\\' OR user LIKE ? ESCAPE '\\')"
+            )
+            values.extend([pattern] * 3)
+        return (
+            "SELECT source_ip, config_name, user, COUNT(*) AS connections FROM connections WHERE "
+            + " AND ".join(clauses) + " GROUP BY source_ip, config_name, user",
+            values,
+        )
+
+    def _connection_count_map(self, params):
+        query, values = self._identity_connection_counts(params)
+        rows = self.db.execute(query, values).fetchall()
+        return {(row["source_ip"], row["config_name"], row["user"]): row["connections"] for row in rows}
+
+    def client_usage(self, params):
+        where, values = self._usage_where(params)
+        group = " GROUP BY source_ip, config_name, user"
+        page = max(1, as_int(params.get("page", [1])[0], 1))
+        limit = clamp(as_int(params.get("limit", [50])[0], 50), 1, 200)
+        offset = (page - 1) * limit
+        with self.lock:
+            connection_counts = self._connection_count_map(params)
+            total = self.db.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM usage_samples WHERE " + where + group + ")", values
+            ).fetchone()[0]
+            rows = self.db.execute(
+                self._usage_select() + where + group + " ORDER BY total DESC, source_ip LIMIT ? OFFSET ?",
+                values + [limit, offset],
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["connections"] = connection_counts.get((item["source_ip"], item["config_name"], item["user"]), 0)
+            item["first_seen_at"] = utc_iso(item["first_seen"])
+            item["last_seen_at"] = utc_iso(item["last_seen"])
+            items.append(item)
+        return {
+            "items": items, "page": page, "limit": limit, "total": total,
+            "pages": max(1, (total + limit - 1) // limit), "bucket_seconds": USAGE_BUCKET_SECONDS,
+        }
 
     def connections(self, params):
         where, values = self._connection_where(params)
@@ -422,13 +713,44 @@ class AuditStore:
                 output.write(b"\n]\n")
             return output.tell()
 
+    def write_usage_export(self, params, export_format, output):
+        where, values = self._usage_where(params)
+        query = self._usage_select() + where + " GROUP BY source_ip, config_name, user ORDER BY total DESC, source_ip"
+        with self.lock:
+            connection_counts = self._connection_count_map(params)
+            rows = self.db.execute(query, values)
+            if export_format == "csv":
+                output.write(b"\xef\xbb\xbf")
+                text_output = io.TextIOWrapper(output, encoding="utf-8", newline="", write_through=True)
+                writer = csv.DictWriter(text_output, fieldnames=list(self.USAGE_EXPORT_COLUMNS), extrasaction="ignore")
+                writer.writeheader()
+                for row in rows:
+                    item = dict(row)
+                    item["connections"] = connection_counts.get((item["source_ip"], item["config_name"], item["user"]), 0)
+                    writer.writerow(item)
+                text_output.flush()
+                text_output.detach()
+            else:
+                output.write(b"[\n")
+                first = True
+                for row in rows:
+                    if not first:
+                        output.write(b",\n")
+                    item = dict(row)
+                    item["connections"] = connection_counts.get((item["source_ip"], item["config_name"], item["user"]), 0)
+                    output.write(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+                    first = False
+                output.write(b"\n]\n")
+            return output.tell()
+
 
 class Collector:
-    def __init__(self, store, url, secret, interval):
+    def __init__(self, store, url, secret, interval, resolver=None):
         self.store = store
         self.url = url.rstrip("/") + "/connections"
         self.secret = secret
         self.interval = clamp(as_int(interval, 1), 1, 60)
+        self.resolver = resolver
         self.opener = build_opener(ProxyHandler({}))
         self.stop_event = threading.Event()
         self.thread = None
@@ -466,7 +788,7 @@ class Collector:
             snapshot = json.loads(response.read().decode("utf-8"))
         if not isinstance(snapshot, dict) or "connections" not in snapshot:
             raise RuntimeError("sing-box API 返回了无效数据")
-        self.store.capture(snapshot)
+        self.store.capture(snapshot, self.resolver)
         with self.lock:
             self.last_success = int(time.time())
             self.last_error = ""
@@ -591,37 +913,53 @@ class AuditHandler(BaseHTTPRequestHandler):
         range_name = params.get("range", ["24h"])[0]
         if range_name not in RANGES and range_name != "all":
             range_name = "24h"
+            params["range"] = [range_name]
+        start = params.get("start", [None])[0]
+        end = params.get("end", [None])[0]
+        try:
+            self.server.store.time_window(range_name, start, end)
+        except ValueError as error:
+            self._json({"error": "invalid_time_range", "message": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path == "/api/summary":
-            payload = self.server.store.summary(range_name)
+            payload = self.server.store.summary(range_name, start, end)
             payload["collector"] = self.server.collector.status()
             self._json(payload)
         elif parsed.path == "/api/timeseries":
-            self._json(self.server.store.timeseries(range_name, params.get("bucket", [None])[0]))
+            self._json(self.server.store.timeseries(range_name, params.get("bucket", [None])[0], start, end))
         elif parsed.path == "/api/top-destinations":
-            self._json({"items": self.server.store.top_destinations(range_name, params.get("limit", [8])[0])})
+            self._json({"items": self.server.store.top_destinations(range_name, params.get("limit", [8])[0], start, end)})
         elif parsed.path == "/api/options":
-            self._json(self.server.store.options(range_name))
+            self._json(self.server.store.options(range_name, start, end))
+        elif parsed.path == "/api/client-usage":
+            self._json(self.server.store.client_usage(params))
         elif parsed.path == "/api/connections":
             self._json(self.server.store.connections(params))
+        elif parsed.path == "/api/usage-export":
+            self._export(params, usage=True)
         elif parsed.path == "/api/export":
             self._export(params)
         else:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
 
-    def _export(self, params):
+    def _export(self, params, usage=False):
         export_format = params.get("format", ["csv"])[0].lower()
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        name_part = "usage" if usage else "connections"
         if export_format == "json":
             content_type = "application/json; charset=utf-8"
-            filename = "sing-box-audit-{}.json".format(stamp)
+            filename = "sing-box-audit-{}-{}.json".format(name_part, stamp)
         elif export_format == "csv":
             content_type = "text/csv; charset=utf-8"
-            filename = "sing-box-audit-{}.csv".format(stamp)
+            filename = "sing-box-audit-{}-{}.csv".format(name_part, stamp)
         else:
             self._json({"error": "invalid_format", "message": "仅支持 csv 或 json"}, HTTPStatus.BAD_REQUEST)
             return
         with tempfile.TemporaryFile(mode="w+b") as export_file:
-            size = self.server.store.write_export(params, export_format, export_file)
+            if usage:
+                size = self.server.store.write_usage_export(params, export_format, export_file)
+            else:
+                size = self.server.store.write_export(params, export_format, export_file)
             export_file.seek(0)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
@@ -649,6 +987,8 @@ def load_config(path):
     if len(str(config.get("web_token") or "")) < 16:
         raise ValueError("web_token 至少需要 16 个字符")
     config["port"] = port
+    if not config.get("config_dir"):
+        config["config_dir"] = os.path.abspath(os.path.join(os.path.dirname(path), "..", "conf"))
     return config
 
 
@@ -657,7 +997,11 @@ def build_server(config):
     if not os.path.isfile(os.path.join(web_root, "index.html")):
         raise ValueError("找不到前端资源: " + web_root)
     store = AuditStore(config["database"], config.get("retention_days", 90))
-    collector = Collector(store, config["collector_url"], config.get("collector_secret", ""), config.get("poll_interval", 1))
+    resolver = ConfigIdentityResolver(config.get("config_dir", ""))
+    collector = Collector(
+        store, config["collector_url"], config.get("collector_secret", ""),
+        config.get("poll_interval", 1), resolver,
+    )
     server = ThreadingHTTPServer((config["listen"], config["port"]), AuditHandler)
     server.store = store
     server.collector = collector

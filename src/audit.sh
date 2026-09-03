@@ -9,6 +9,7 @@ audit_usage() {
     msg "   $is_core audit start|stop|restart              管理审计服务"
     msg "   $is_core audit set <option> <value>             修改 listen/port/retention/interval/token"
     msg "   $is_core audit export [csv|json] [range] [file] 导出数据 (range: 1h/6h/24h/7d/30d/all)"
+    msg "   $is_core audit report [csv|json] [range] [file] 按 IP/配置汇总并导出用量"
     msg "   $is_core audit purge <days>                    删除指定天数以前的数据"
     msg "   $is_core audit disable                         停止并禁用服务, 保留配置和数据"
     msg "   $is_core audit uninstall [-y]                  卸载审计服务并删除全部审计数据\n"
@@ -193,6 +194,7 @@ audit_enable() {
         --arg listen "$listen" \
         --argjson port "$port" \
         --arg database "$is_audit_database" \
+        --arg config_dir "$is_conf_dir" \
         --arg collector_url "$collector_url" \
         --arg collector_secret "$controller_secret" \
         --arg web_token "$web_token" \
@@ -203,6 +205,7 @@ audit_enable() {
             listen: $listen,
             port: $port,
             database: $database,
+            config_dir: $config_dir,
             collector_url: $collector_url,
             collector_secret: $collector_secret,
             web_token: $web_token,
@@ -348,15 +351,17 @@ audit_export() {
     local format=${1:-csv}
     local range=${2:-24h}
     local output=$3
-    local listen port token url
+    local view=$4
+    local listen port token url endpoint=export name_part=connections
+    [[ $view == usage ]] && endpoint=usage-export && name_part=usage
     [[ $format == csv || $format == json ]] || err "导出格式仅支持 csv 或 json."
     [[ $range =~ ^(1h|6h|24h|7d|30d|all)$ ]] || err "时间范围仅支持 1h/6h/24h/7d/30d/all."
-    [[ ! $output ]] && output="$PWD/sing-box-audit-$(date +%Y%m%d-%H%M%S).$format"
+    [[ ! $output ]] && output="$PWD/sing-box-audit-$name_part-$(date +%Y%m%d-%H%M%S).$format"
     port=$(audit_config_get '.port')
     listen=$(audit_config_get '.listen')
     [[ $listen == 0.0.0.0 ]] && listen=127.0.0.1
     token=$(audit_config_get '.web_token')
-    url="http://$listen:$port/api/export?format=$format&range=$range"
+    url="http://$listen:$port/api/$endpoint?format=$format&range=$range"
     if ! _wget -q --header="Authorization: Bearer $token" -O "$output" "$url"; then
         rm -f "$output"
         err "导出失败, 请确认审计服务正在运行."
@@ -456,6 +461,9 @@ audit_main() {
         ;;
     export)
         audit_export "$2" "$3" "$4"
+        ;;
+    report)
+        audit_export "$2" "$3" "$4" usage
         ;;
     purge)
         audit_purge "$2"
