@@ -1,6 +1,6 @@
 # sing-box 流量审计部署与使用
 
-本文介绍如何为 233boy/sing-box 管理脚本部署可选的流量审计服务，以及如何访问
+本文介绍本项目全新安装时默认启用的流量审计服务，以及如何访问
 Web 仪表盘、筛选和导出数据、调整保留策略、备份恢复和排查故障。
 
 > 流量审计会记录来源 IP、配置文件、可识别的 UUID/用户、目标地址、端口、协议、路由和流量等信息。
@@ -71,9 +71,9 @@ IP / 配置 / 用户明细。因此，跨越时间范围的长连接只会把所
 - root 权限。
 - sing-box 核心需要包含 Clash API 支持；启用时会自动执行配置检查。
 
-Python 3 和标准库 `sqlite3` 是审计服务唯一的新增运行时依赖。首次执行
-`sing-box audit enable` 时，如果系统缺少 Python 3，脚本会使用当前发行版的包管理器
-自动安装；不启用审计时不会安装该依赖。
+Python 3 和标准库 `sqlite3` 是审计服务唯一的新增运行时依赖。全新安装默认启用审计，
+如果系统缺少 Python 3，脚本会使用当前发行版的包管理器自动安装；使用 `--no-audit`
+跳过审计时不会安装该依赖。已有安装首次执行 `sing-box audit enable` 时也会自动检查依赖。
 
 可先手动检查：
 
@@ -109,6 +109,19 @@ bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/inst
 ```
 
 无需下载整个仓库。`install.sh` 会从本仓库的 GitHub Release 下载发布包。
+全新安装完成后会自动启用审计，默认监听 `127.0.0.1:9091`，并在终端显示随机访问令牌。
+
+如需在安装时自定义监听地址和端口：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --audit-listen 0.0.0.0 --audit-port 9091
+```
+
+如不需要审计，可显式关闭默认行为：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --no-audit
+```
 
 如需审查源码或进行本地修改，也可以获取完整仓库后安装：
 
@@ -120,12 +133,6 @@ bash install.sh --local-install
 
 `install.sh` 会安装 sing-box 主服务并生成默认代理配置。请注意，这不是只安装审计服务，
 不要在已有 sing-box 安装上重复执行；已有安装请使用下一节的方法。
-
-安装完成后启用审计：
-
-```bash
-sing-box audit enable
-```
 
 ### 3.2 已安装服务器：迁移到本仓库
 
@@ -159,11 +166,12 @@ sing-box audit enable
 
 如果服务器上的脚本包含本地定制，请先备份 `/etc/sing-box/sh`，再决定是否覆盖。
 
-## 4. 首次启用
+## 4. 启用与访问
 
-### 4.1 默认启用
+### 4.1 已有安装手动启用
 
-推荐使用只监听本机的默认设置：
+全新安装已经默认完成此步骤。使用 `--script-update` 迁移的已有安装，推荐手动启用只监听
+本机的默认设置：
 
 ```bash
 sing-box audit enable

@@ -23,7 +23,7 @@
 - 一键添加 VLESS-(WS/H2/HTTPUpgrade)-TLS
 - 一键添加 Trojan-(WS/H2/HTTPUpgrade)-TLS
 - 一键启用 BBR
-- 可选流量审计服务与 Web 仪表盘
+- 默认启用流量审计服务与 Web 仪表盘
 - 按配置文件统计指定时间段的流量、来源 IP、用户和连接数
 - 按来源 IP、配置文件和 UUID/用户统计明细流量
 - 审计数据筛选、CSV/JSON 导出与自动保留
@@ -54,10 +54,19 @@ bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/inst
 ```
 
 无需克隆整个仓库。安装器会从本仓库的 GitHub Release 下载所需脚本，并继续使用原来的
-`/usr/local/bin/sing-box` 和 `/usr/local/bin/sb` 命令入口。流量审计为可选功能，安装完成后执行：
+`/usr/local/bin/sing-box` 和 `/usr/local/bin/sb` 命令入口。全新安装会自动启用流量审计，
+默认仅监听 `127.0.0.1:9091`，安装结束时会显示访问地址和随机令牌。
+
+如需自定义审计监听地址或端口：
 
 ```bash
-sing-box audit enable
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --audit-listen 0.0.0.0 --audit-port 9091
+```
+
+`0.0.0.0` 会将无 TLS 的页面暴露到网络，请配合防火墙或反向代理限制访问。如不需要审计：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/WangzyaaaA/sing-box/main/install.sh) --no-audit
 ```
 
 如果服务器原来安装的是 `233boy/sing-box`，先执行一次脚本源迁移：

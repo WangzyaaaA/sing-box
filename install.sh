@@ -77,6 +77,8 @@ is_audit_config=$is_audit_dir/config.json
 is_audit_data_dir=/var/lib/$is_audit_name
 is_audit_database=$is_audit_data_dir/audit.db
 is_audit_server=$is_sh_dir/src/audit/server.py
+is_audit_listen=127.0.0.1
+is_audit_port=9091
 is_pkg="wget tar bash"
 # Alpine: gcompat provides glibc compatibility for prebuilt binaries
 [[ $cmd =~ apk ]] && is_pkg="$is_pkg gcompat jq"
@@ -132,15 +134,34 @@ msg() {
 
 # show help msg
 show_help() {
-    echo -e "Usage: $0 [-f xxx | -l | --script-update | -p xxx | -v xxx | -h]"
+    echo -e "Usage: $0 [-f xxx | -l | --script-update | -p xxx | -v xxx | --no-audit | --audit-listen xxx | --audit-port xxx | -h]"
     echo -e "  -f, --core-file <path>          自定义 $is_core_name 文件路径, e.g., -f /root/$is_core-linux-amd64.tar.gz"
     echo -e "  -l, --local-install             本地获取安装脚本, 使用当前目录"
     echo -e "      --script-update             仅更新已安装的管理脚本, 保留配置和审计数据"
     echo -e "  -p, --proxy <addr>              使用代理下载, e.g., -p http://127.0.0.1:2333"
     echo -e "  -v, --core-version <ver>        自定义 $is_core_name 版本, e.g., -v v1.8.13"
+    echo -e "      --no-audit                  全新安装时不启用流量审计"
+    echo -e "      --audit-listen <addr>       审计页面监听地址, 默认 127.0.0.1"
+    echo -e "      --audit-port <port>         审计页面端口, 默认 9091"
     echo -e "  -h, --help                      显示此帮助界面\n"
 
     exit 0
+}
+
+validate_audit_listen_arg() {
+    local listen=$1
+    local octet
+    local old_ifs=$IFS
+    [[ $listen == localhost ]] && return 0
+    [[ $listen =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    IFS=.
+    for octet in $listen; do
+        if ((10#$octet > 255)); then
+            IFS=$old_ifs
+            return 1
+        fi
+    done
+    IFS=$old_ifs
 }
 
 # install dependent pkg
@@ -280,6 +301,30 @@ pass_args() {
             script_update=1
             shift 1
             ;;
+        --no-audit)
+            is_no_audit=1
+            shift 1
+            ;;
+        --audit-listen)
+            [[ -z $2 || $2 == -* ]] && {
+                err "($1) 缺少必需参数, 正确使用示例: [$1 127.0.0.1]"
+            }
+            validate_audit_listen_arg "$2" || {
+                err "($2) 不是有效的审计监听地址, 请输入 IPv4 地址或 localhost."
+            }
+            is_audit_listen=$2
+            shift 2
+            ;;
+        --audit-port)
+            [[ -z $2 || $2 == -* ]] && {
+                err "($1) 缺少必需参数, 正确使用示例: [$1 9091]"
+            }
+            [[ $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 65535 ]] || {
+                err "($2) 不是有效的审计页面端口, 请输入 1 到 65535."
+            }
+            is_audit_port=$2
+            shift 2
+            ;;
         -p | --proxy)
             [[ -z $2 ]] && {
                 err "($1) 缺少必需参数, 正确使用示例: [$1 http://127.0.0.1:2333 or -p socks5://127.0.0.1:2333]"
@@ -369,6 +414,7 @@ main() {
     msg warn "开始安装..."
     [[ $is_core_ver ]] && msg warn "${is_core_name} 版本: ${yellow}$is_core_ver${none}"
     [[ $proxy ]] && msg warn "使用代理: ${yellow}$proxy${none}"
+    [[ ! $is_no_audit ]] && msg warn "流量审计: ${yellow}默认启用 ($is_audit_listen:$is_audit_port)${none}"
     # create tmpdir
     mkdir -p $tmpdir
     # if is_core_file, copy file
@@ -491,6 +537,11 @@ main() {
     add reality
     # wait for background tasks (e.g., OpenRC service start)
     wait
+    # enable traffic audit by default for a new installation
+    if [[ ! $is_no_audit ]]; then
+        load audit.sh
+        audit_enable "$is_audit_listen" "$is_audit_port"
+    fi
     # remove tmp dir and exit.
     exit_and_del_tmpdir ok
 }
