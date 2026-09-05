@@ -115,15 +115,15 @@ function drawChart(points) {
   const x = (index) => pad.left + index * (width - pad.left - pad.right) / Math.max(1, points.length - 1);
   const y = (value) => pad.top + (1 - value / max) * (height - pad.top - pad.bottom);
   ctx.font = "10px ui-monospace, monospace";
-  ctx.fillStyle = "#718087";
-  ctx.strokeStyle = "rgba(70,84,91,.45)";
+  ctx.fillStyle = "#858588";
+  ctx.strokeStyle = "rgba(29,29,31,.1)";
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
     const gy = pad.top + i * (height - pad.top - pad.bottom) / 4;
     ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(width - pad.right, gy); ctx.stroke();
     ctx.fillText(formatBytes(max * (4 - i) / 4), 2, gy + 3);
   }
-  const series = [{ key: "download", color: "#52d7ff" }, { key: "upload", color: "#c7ff4a" }];
+  const series = [{ key: "download", color: "#708795" }, { key: "upload", color: "#66816f" }];
   series.forEach(({ key, color }) => {
     ctx.beginPath();
     points.forEach((point, index) => { const px = x(index), py = y(point[key]); index ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
@@ -136,7 +136,7 @@ function drawChart(points) {
     const label = state.range === "1h" || state.range === "6h" || state.range === "24h"
       ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
       : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-    ctx.fillStyle = "#718087"; ctx.textAlign = i === 0 ? "left" : i === labelCount - 1 ? "right" : "center";
+    ctx.fillStyle = "#858588"; ctx.textAlign = i === 0 ? "left" : i === labelCount - 1 ? "right" : "center";
     ctx.fillText(label, x(index), height - 4);
   }
 }
