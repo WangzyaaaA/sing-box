@@ -529,6 +529,32 @@ class AuditStore:
             ],
         }
 
+    def activity(self, range_name, timezone_offset=0, start=None, end=None):
+        """Aggregate traffic by local weekday and hour for a compact heatmap."""
+        since, until = self.time_window(range_name, start, end)
+        # JavaScript getTimezoneOffset is UTC minus local time, so invert it
+        # before shifting Unix timestamps for SQLite's UTC-based strftime.
+        shift_seconds = -clamp(as_int(timezone_offset, 0), -840, 840) * 60
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT CAST(strftime('%w', ts + ?, 'unixepoch') AS INTEGER) AS weekday, "
+                "CAST(strftime('%H', ts + ?, 'unixepoch') AS INTEGER) AS hour, "
+                "SUM(upload) AS upload, SUM(download) AS download "
+                "FROM traffic_samples WHERE ts BETWEEN ? AND ? GROUP BY weekday, hour ORDER BY weekday, hour",
+                (shift_seconds, shift_seconds, since, until),
+            ).fetchall()
+        return {
+            "timezone_offset": -shift_seconds // 60,
+            "cells": [
+                {
+                    "weekday": row["weekday"], "hour": row["hour"],
+                    "upload": row["upload"], "download": row["download"],
+                    "total": row["upload"] + row["download"],
+                }
+                for row in rows
+            ],
+        }
+
     def top_destinations(self, range_name, limit=8, start=None, end=None):
         since, until = self.time_window(range_name, start, end)
         since = (since // USAGE_BUCKET_SECONDS) * USAGE_BUCKET_SECONDS
@@ -542,6 +568,28 @@ class AuditStore:
                 (since, until, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def traffic_flow(self, range_name, limit=12, start=None, end=None):
+        """Aggregate the busiest connection paths that overlap a time window."""
+        since, until = self.time_window(range_name, start, end)
+        limit = clamp(as_int(limit, 12), 1, 30)
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT "
+                "COALESCE(NULLIF(source_ip, ''), '未知来源') AS source, "
+                "COALESCE(NULLIF(config_name, ''), NULLIF(inbound, ''), '未识别') AS config, "
+                "COALESCE(NULLIF(outbound, ''), '其他路由') AS route, "
+                "COALESCE(NULLIF(host, ''), NULLIF(destination, ''), NULLIF(destination_ip, ''), '未知目标') AS target, "
+                "SUM(upload) AS upload, SUM(download) AS download, "
+                "SUM(upload) + SUM(download) AS total "
+                "FROM connections WHERE start_time <= ? AND last_seen >= ? AND (upload + download) > 0 "
+                "GROUP BY source, config, route, target ORDER BY total DESC LIMIT ?",
+                (until, since, limit),
+            ).fetchall()
+        return {
+            "items": [dict(row) for row in rows],
+            "scope": "connections_overlapping_window",
+        }
 
     def options(self, range_name, start=None, end=None):
         since, until = self.time_window(range_name, start, end)
@@ -1019,8 +1067,12 @@ class AuditHandler(BaseHTTPRequestHandler):
             self._json(payload)
         elif parsed.path == "/api/timeseries":
             self._json(self.server.store.timeseries(range_name, params.get("bucket", [None])[0], start, end))
+        elif parsed.path == "/api/activity":
+            self._json(self.server.store.activity(range_name, params.get("timezone_offset", [0])[0], start, end))
         elif parsed.path == "/api/top-destinations":
             self._json({"items": self.server.store.top_destinations(range_name, params.get("limit", [8])[0], start, end)})
+        elif parsed.path == "/api/traffic-flow":
+            self._json(self.server.store.traffic_flow(range_name, params.get("limit", [12])[0], start, end))
         elif parsed.path == "/api/options":
             self._json(self.server.store.options(range_name, start, end))
         elif parsed.path == "/api/client-usage":

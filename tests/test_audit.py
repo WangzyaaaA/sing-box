@@ -151,6 +151,39 @@ class StoreTests(unittest.TestCase):
         self.assertIn("config_name,first_seen,last_seen,clients,users", exported.getvalue().decode("utf-8-sig"))
         self.assertEqual(json.loads(json_exported.getvalue())[0]["config_name"], "config-a.json")
 
+    def test_traffic_flow_groups_connection_paths_in_time_window(self):
+        item = connection(upload=0, download=0)
+        with mock.patch.object(audit.time, "time", return_value=8000):
+            self.store.capture({"uploadTotal": 0, "downloadTotal": 0, "connections": [item]})
+        item.update(upload=40, download=80)
+        with mock.patch.object(audit.time, "time", return_value=8062):
+            self.store.capture({"uploadTotal": 40, "downloadTotal": 80, "connections": [item]})
+            result = self.store.traffic_flow("24h")
+
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual(result["items"][0]["source"], "198.51.100.10")
+        self.assertEqual(result["items"][0]["config"], "vless-in")
+        self.assertEqual(result["items"][0]["route"], "direct")
+        self.assertEqual(result["items"][0]["target"], "example.com")
+        self.assertEqual(result["items"][0]["total"], 120)
+
+    def test_activity_groups_traffic_by_local_weekday_and_hour(self):
+        monday_utc = 1788134400  # 2026-08-31 00:00:00 UTC
+        with self.store.lock, self.store.db:
+            self.store.db.execute(
+                "INSERT INTO traffic_samples(ts, upload, download) VALUES (?, ?, ?)",
+                (monday_utc, 10, 20),
+            )
+        result = self.store.activity(
+            "24h", timezone_offset=-480,
+            start=str(monday_utc), end=str(monday_utc),
+        )
+
+        self.assertEqual(result["timezone_offset"], -480)
+        self.assertEqual(result["cells"][0]["weekday"], 1)
+        self.assertEqual(result["cells"][0]["hour"], 8)
+        self.assertEqual(result["cells"][0]["total"], 30)
+
     def test_config_resolver_maps_inbound_to_file_and_uuid(self):
         config_dir = Path(self.temp.name) / "conf"
         config_dir.mkdir()
@@ -280,6 +313,12 @@ class HttpIntegrationTests(unittest.TestCase):
             payload = json.load(response)
             self.assertEqual(payload["active_connections"], 1)
             self.assertTrue(payload["collector"]["connected"])
+        with self.request("/api/traffic-flow?range=24h", "test-web-token-123456") as response:
+            payload = json.load(response)
+            self.assertEqual(payload["items"][0]["target"], "example.com")
+        with self.request("/api/activity?range=24h&timezone_offset=-480", "test-web-token-123456") as response:
+            payload = json.load(response)
+            self.assertEqual(payload["timezone_offset"], -480)
         with self.request("/api/export?format=csv&range=24h", "test-web-token-123456") as response:
             body = response.read().decode("utf-8-sig")
             self.assertIn("example.com", body)
@@ -292,6 +331,8 @@ class HttpIntegrationTests(unittest.TestCase):
             self.assertIn("连接审计记录", page)
             self.assertIn("IP / 配置流量", page)
             self.assertIn("配置文件流量", page)
+            self.assertIn("访问热力", page)
+            self.assertIn("流量路径", page)
 
     def test_usage_api_custom_range_and_export(self):
         self.server.collector.stop()

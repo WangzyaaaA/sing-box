@@ -12,8 +12,9 @@
   <div class="shell">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">S</span>
-        <div><strong>sing-box</strong><span>流量审计</span></div>
+        <strong>sing-box</strong>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span>流量审计</span>
       </div>
       <div class="top-actions">
         <span class="health" id="health"><i></i><span>正在连接</span></span>
@@ -32,107 +33,172 @@
           <label><span>结束</span><input id="rangeEnd" type="datetime-local" step="60"></label>
           <button class="button secondary" id="applyRange" type="button">应用</button>
         </div>
-        <button class="button secondary" id="refresh" type="button">刷新</button>
+        <button class="icon-button" id="refresh" type="button" aria-label="刷新" title="刷新">↻</button>
         <button class="button primary" id="exportCsv" type="button">导出连接 CSV</button>
       </div>
     </header>
 
     <main>
-      <section class="intro">
-        <div>
-          <p class="eyebrow">TRAFFIC OBSERVATORY</p>
-          <h1>连接看得见，流量有据可查。</h1>
-          <p>从本机 sing-box 管理接口采集数据，按来源 IP、配置文件和 UUID/用户审计上下行用量。</p>
-        </div>
-        <div class="live-rate" aria-label="当前速率">
-          <span>当前速率</span>
-          <strong id="liveRate">0 B/s</strong>
-          <small><b class="down">↓</b> <span id="downRate">0 B/s</span> <b class="up">↑</b> <span id="upRate">0 B/s</span></small>
-        </div>
-      </section>
-
-      <section class="metrics" aria-label="流量摘要">
-        <article class="metric"><span>总流量</span><strong id="totalTraffic">—</strong><small id="rangeCopy">最近 24 小时</small></article>
-        <article class="metric"><span>下载</span><strong id="downloadTraffic">—</strong><small class="down">DOWNLOAD</small></article>
-        <article class="metric"><span>上传</span><strong id="uploadTraffic">—</strong><small class="up">UPLOAD</small></article>
-        <article class="metric"><span>活动连接</span><strong id="activeConnections">—</strong><small><span id="allConnections">0</span> 条审计记录</small></article>
-      </section>
-
-      <section class="dashboard-grid">
+      <section class="overview-grid">
         <article class="panel chart-panel">
-          <div class="panel-heading">
-            <div><p class="eyebrow">TRANSFER</p><h2>流量趋势</h2></div>
-            <div class="legend"><span><i class="dot down-bg"></i>下载</span><span><i class="dot up-bg"></i>上传</span></div>
+          <div class="panel-heading chart-heading">
+            <div>
+              <p class="eyebrow">LIVE OVERVIEW</p>
+              <h1>实时流量趋势</h1>
+            </div>
+            <div class="chart-context">
+              <span id="rangeCopy">最近 24 小时</span>
+              <span><i class="dot download-bg"></i>下载</span>
+              <span><i class="dot upload-bg"></i>上传</span>
+            </div>
           </div>
-          <div class="chart-wrap"><canvas id="trafficChart" role="img" aria-label="上传和下载流量趋势图"></canvas><div class="empty-chart" id="emptyChart">等待采集流量数据</div></div>
+          <div class="chart-wrap">
+            <canvas id="trafficChart" role="img" aria-label="上传和下载流量趋势图"></canvas>
+            <div class="chart-tooltip" id="chartTooltip" hidden></div>
+            <div class="empty-chart" id="emptyChart">等待采集流量数据</div>
+          </div>
         </article>
 
-        <article class="panel destinations-panel">
-          <div class="panel-heading"><div><p class="eyebrow">DESTINATIONS</p><h2>热门目标</h2></div></div>
-          <ol class="destination-list" id="destinations"><li class="placeholder">暂无目标记录</li></ol>
+        <article class="panel pulse-panel">
+          <div class="pulse-status">
+            <span class="pulse-icon" aria-hidden="true"><i></i></span>
+            <div><strong id="collectorStatus">正在连接</strong><span id="collectorCopy">等待采集服务响应</span></div>
+          </div>
+          <div class="live-rate" aria-label="当前速率">
+            <span>当前速率</span>
+            <strong id="liveRate">0 B/s</strong>
+            <small><b class="download">↓</b> <span id="downRate">0 B/s</span><b class="upload">↑</b> <span id="upRate">0 B/s</span></small>
+          </div>
+          <div class="composition">
+            <div><span>流量构成</span><strong id="totalTraffic">—</strong></div>
+            <div class="composition-track" aria-label="上下行流量构成"><i id="downloadShare"></i><b id="uploadShare"></b></div>
+            <div class="composition-labels">
+              <span><i class="dot download-bg"></i>下载 <strong id="downloadTraffic">—</strong></span>
+              <span><i class="dot upload-bg"></i>上传 <strong id="uploadTraffic">—</strong></span>
+            </div>
+          </div>
+          <div class="compact-metrics">
+            <div><span>活动连接</span><strong id="activeConnections">—</strong></div>
+            <div><span>来源 IP</span><strong id="uniqueClients">—</strong></div>
+            <div><span>目标</span><strong id="uniqueDestinations">—</strong></div>
+          </div>
+          <span class="audit-count"><b id="allConnections">0</b> 条审计记录</span>
         </article>
       </section>
 
-      <section class="panel records-panel usage-panel">
-        <div class="panel-heading records-heading">
-          <div><p class="eyebrow">CONFIG ACCOUNTING</p><h2>配置文件流量</h2></div>
-          <div class="filters">
-            <label><span class="sr-only">搜索配置文件</span><input id="configUsageSearch" type="search" placeholder="搜索配置文件…" autocomplete="off"></label>
-            <button class="button primary" id="configUsageExportCsv" type="button">导出 CSV</button>
-            <button class="button secondary" id="configUsageExportJson" type="button">导出 JSON</button>
+      <section class="analytics-grid">
+        <article class="panel data-panel">
+          <div class="panel-heading compact-heading">
+            <div><p class="eyebrow">DESTINATIONS</p><h2>热门目标</h2></div>
+            <span class="panel-note">面积代表流量</span>
           </div>
-        </div>
-        <div class="table-wrap">
-          <table class="config-usage-table">
-            <thead><tr><th>配置文件</th><th>首次流量</th><th>最后流量</th><th class="number">来源 IP</th><th class="number">用户</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
-            <tbody id="configUsageRows"><tr><td colspan="9" class="empty-row">正在按配置文件统计流量…</td></tr></tbody>
-          </table>
-        </div>
-        <div class="pagination"><span id="configUsagePageInfo">第 1 页</span><div><button class="button secondary" id="configUsagePrevPage" type="button">上一页</button><button class="button secondary" id="configUsageNextPage" type="button">下一页</button></div></div>
+          <div class="treemap" id="destinations"><div class="visual-empty">暂无目标记录</div></div>
+        </article>
+
+        <article class="panel data-panel">
+          <div class="panel-heading compact-heading">
+            <div><p class="eyebrow">CONFIGURATION</p><h2>配置流量</h2></div>
+            <div class="mini-legend"><span><i class="dot download-bg"></i>下载</span><span><i class="dot upload-bg"></i>上传</span></div>
+          </div>
+          <div class="config-chart" id="configChart"><div class="visual-empty">等待配置流量数据</div></div>
+        </article>
       </section>
 
-      <section class="panel records-panel usage-panel">
-        <div class="panel-heading records-heading">
-          <div><p class="eyebrow">CLIENT ACCOUNTING</p><h2>IP / 配置流量</h2></div>
-          <div class="filters">
-            <label><span class="sr-only">搜索 IP 或配置</span><input id="usageSearch" type="search" placeholder="搜索 IP、配置文件、UUID…" autocomplete="off"></label>
-            <button class="button primary" id="usageExportCsv" type="button">导出 CSV</button>
-            <button class="button secondary" id="usageExportJson" type="button">导出 JSON</button>
+      <section class="analytics-grid lower-grid">
+        <article class="panel data-panel">
+          <div class="panel-heading compact-heading">
+            <div><p class="eyebrow">ACTIVITY</p><h2>访问热力</h2></div>
+            <span class="panel-note">按本地时间汇总</span>
           </div>
-        </div>
-        <div class="table-wrap">
-          <table class="usage-table">
-            <thead><tr><th>来源 IP</th><th>配置文件</th><th>UUID / 用户</th><th>首次流量</th><th>最后流量</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
-            <tbody id="usageRows"><tr><td colspan="9" class="empty-row">正在统计 IP 与配置流量…</td></tr></tbody>
-          </table>
-        </div>
-        <div class="pagination"><span id="usagePageInfo">第 1 页</span><div><button class="button secondary" id="usagePrevPage" type="button">上一页</button><button class="button secondary" id="usageNextPage" type="button">下一页</button></div></div>
+          <div class="heatmap-wrap">
+            <div class="heatmap" id="heatmap"><div class="visual-empty">等待时间分布数据</div></div>
+            <div class="heatmap-legend"><span>低</span><i></i><span>高</span></div>
+          </div>
+        </article>
+
+        <article class="panel data-panel flow-panel">
+          <div class="panel-heading compact-heading">
+            <div><p class="eyebrow">TRAFFIC FLOW</p><h2>流量路径</h2></div>
+            <span class="panel-note">来源 → 配置 → 路由 → 目标</span>
+          </div>
+          <div class="flow-wrap" id="flowWrap">
+            <svg id="flowChart" role="img" aria-label="来源、配置、路由和目标的流量路径图"></svg>
+            <div class="visual-empty" id="flowEmpty">等待连接路径数据</div>
+          </div>
+        </article>
       </section>
 
-      <section class="panel records-panel">
-        <div class="panel-heading records-heading">
-          <div><p class="eyebrow">CONNECTION LOG</p><h2>连接审计记录</h2></div>
-          <div class="filters">
-            <label><span class="sr-only">搜索</span><input id="search" type="search" placeholder="搜索 IP、域名、用户…" autocomplete="off"></label>
-            <label><span class="sr-only">协议</span><select id="protocol"><option value="">全部协议</option></select></label>
-            <label><span class="sr-only">状态</span><select id="status"><option value="">全部状态</option><option value="active">活动</option><option value="closed">已结束</option></select></label>
-            <button class="button secondary" id="exportJson" type="button">JSON</button>
-          </div>
+      <details class="panel records-drawer" id="recordsDrawer">
+        <summary><span class="summary-icon" aria-hidden="true">☷</span><strong>详细记录</strong><span>搜索、筛选、分页与导出原始审计数据</span></summary>
+        <div class="records-content">
+          <nav class="records-tabs" aria-label="详细记录分类">
+            <button class="tab-button active" type="button" data-record-tab="connections">连接审计</button>
+            <button class="tab-button" type="button" data-record-tab="configs">配置文件流量</button>
+            <button class="tab-button" type="button" data-record-tab="clients">IP / 配置流量</button>
+          </nav>
+
+          <section class="record-panel active" data-record-panel="connections">
+            <div class="records-heading">
+              <div><p class="eyebrow">CONNECTION LOG</p><h2>连接审计记录</h2></div>
+              <div class="filters">
+                <label><span class="sr-only">搜索</span><input id="search" type="search" placeholder="搜索 IP、域名、用户…" autocomplete="off"></label>
+                <label><span class="sr-only">协议</span><select id="protocol"><option value="">全部协议</option></select></label>
+                <label><span class="sr-only">状态</span><select id="status"><option value="">全部状态</option><option value="active">活动</option><option value="closed">已结束</option></select></label>
+                <button class="button secondary" id="exportJson" type="button">导出 JSON</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>开始时间</th><th>来源</th><th>目标</th><th>用户 / 入站</th><th>协议</th><th>路由</th><th class="number">上传</th><th class="number">下载</th><th>状态</th></tr></thead>
+                <tbody id="connectionRows"><tr><td colspan="9" class="empty-row">正在读取审计数据…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pagination"><span id="pageInfo">第 1 页</span><div><button class="button secondary" id="prevPage" type="button">上一页</button><button class="button secondary" id="nextPage" type="button">下一页</button></div></div>
+          </section>
+
+          <section class="record-panel" data-record-panel="configs" hidden>
+            <div class="records-heading">
+              <div><p class="eyebrow">CONFIG ACCOUNTING</p><h2>配置文件流量</h2></div>
+              <div class="filters">
+                <label><span class="sr-only">搜索配置文件</span><input id="configUsageSearch" type="search" placeholder="搜索配置文件…" autocomplete="off"></label>
+                <button class="button primary" id="configUsageExportCsv" type="button">导出 CSV</button>
+                <button class="button secondary" id="configUsageExportJson" type="button">导出 JSON</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="config-usage-table">
+                <thead><tr><th>配置文件</th><th>首次流量</th><th>最后流量</th><th class="number">来源 IP</th><th class="number">用户</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
+                <tbody id="configUsageRows"><tr><td colspan="9" class="empty-row">正在按配置文件统计流量…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pagination"><span id="configUsagePageInfo">第 1 页</span><div><button class="button secondary" id="configUsagePrevPage" type="button">上一页</button><button class="button secondary" id="configUsageNextPage" type="button">下一页</button></div></div>
+          </section>
+
+          <section class="record-panel" data-record-panel="clients" hidden>
+            <div class="records-heading">
+              <div><p class="eyebrow">CLIENT ACCOUNTING</p><h2>IP / 配置流量</h2></div>
+              <div class="filters">
+                <label><span class="sr-only">搜索 IP 或配置</span><input id="usageSearch" type="search" placeholder="搜索 IP、配置文件、UUID…" autocomplete="off"></label>
+                <button class="button primary" id="usageExportCsv" type="button">导出 CSV</button>
+                <button class="button secondary" id="usageExportJson" type="button">导出 JSON</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="usage-table">
+                <thead><tr><th>来源 IP</th><th>配置文件</th><th>UUID / 用户</th><th>首次流量</th><th>最后流量</th><th class="number">连接</th><th class="number">上传</th><th class="number">下载</th><th class="number">合计</th></tr></thead>
+                <tbody id="usageRows"><tr><td colspan="9" class="empty-row">正在统计 IP 与配置流量…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pagination"><span id="usagePageInfo">第 1 页</span><div><button class="button secondary" id="usagePrevPage" type="button">上一页</button><button class="button secondary" id="usageNextPage" type="button">下一页</button></div></div>
+          </section>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>开始时间</th><th>来源</th><th>目标</th><th>用户 / 入站</th><th>协议</th><th>路由</th><th class="number">上传</th><th class="number">下载</th><th>状态</th></tr></thead>
-            <tbody id="connectionRows"><tr><td colspan="9" class="empty-row">正在读取审计数据…</td></tr></tbody>
-          </table>
-        </div>
-        <div class="pagination"><span id="pageInfo">第 1 页</span><div><button class="button secondary" id="prevPage" type="button">上一页</button><button class="button secondary" id="nextPage" type="button">下一页</button></div></div>
-      </section>
+      </details>
     </main>
   </div>
 
   <dialog id="tokenDialog">
     <form id="tokenForm" method="dialog">
-      <span class="brand-mark">S</span>
+      <span class="dialog-mark">S</span>
       <p class="eyebrow">SECURE ACCESS</p>
       <h2>输入审计访问令牌</h2>
       <p>在服务器运行 <code>sing-box audit token</code> 可查看令牌。</p>
